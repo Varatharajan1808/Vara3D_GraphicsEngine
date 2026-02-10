@@ -1,0 +1,92 @@
+/* ===================================
+   Theme Variables - Dark Theme
+   =================================== */
+
+:root {
+  /* Background colors */
+  --bg-primary: #1e1e1e;
+  --bg-secondary: #252526;
+  --bg-tertiary: #2d2d30;
+  --bg-hover: #2a2d2e;
+  --bg-active: #37373d;
+  
+  /* Text colors */
+  --text-primary: #cccccc;
+  --text-secondary: #969696;
+  --text-disabled: #656565;
+  --text-white: #ffffff;
+  
+  /* Accent colors */
+  --accent-primary: #0e639c;
+  --accent-hover: #1177bb;
+  --accent-active: #4fc3f7;
+  --accent-light: rgba(14, 99, 156, 0.2);
+  
+  /* Borders */
+  --border-color: #3e3e42;
+  --border-light: #555555;
+  --border-focus: #007acc;
+  
+  /* Status colors */
+  --success: #4caf50;
+  --warning: #ff9800;
+  --error: #f44336;
+  --info: #2196f3;
+  
+  /* Shadows */
+  --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.3);
+  --shadow-md: 0 2px 6px rgba(0, 0, 0, 0.4);
+  --shadow-lg: 0 4px 12px rgba(0, 0, 0, 0.5);
+  
+  /* Spacing */
+  --spacing-xs: 4px;
+  --spacing-sm: 8px;
+  --spacing-md: 12px;
+  --spacing-lg: 16px;
+  --spacing-xl: 24px;
+  
+  /* Layout dimensions */
+  --topbar-height: 40px;
+  --toolbar-width: 50px;
+  --rightpanel-width: 320px;
+  --statusbar-height: 30px;
+  
+  /* Typography */
+  --font-family: 'Segoe UI', 'Roboto', system-ui, -apple-system, sans-serif;
+  --font-size-xs: 11px;
+  --font-size-sm: 12px;
+  --font-size-md: 13px;
+  --font-size-lg: 14px;
+  
+  /* Border radius */
+  --radius-sm: 2px;
+  --radius-md: 3px;
+  --radius-lg: 4px;
+  
+  /* Transitions */
+  --transition-fast: 0.15s ease;
+  --transition-normal: 0.2s ease;
+  --transition-slow: 0.3s ease;
+  
+  /* Z-index layers */
+  --z-base: 1;
+  --z-dropdown: 100;
+  --z-modal: 200;
+  --z-tooltip: 300;
+}
+
+/* Light theme (optional - for future use) */
+[data-theme="light"] {
+  --bg-primary: #f3f3f3;
+  --bg-secondary: #ffffff;
+  --bg-tertiary: #e8e8e8;
+  --bg-hover: #e0e0e0;
+  --bg-active: #d0d0d0;
+  
+  --text-primary: #333333;
+  --text-secondary: #666666;
+  --text-disabled: #999999;
+  
+  --border-color: #d0d0d0;
+  --border-light: #e0e0e0;
+}

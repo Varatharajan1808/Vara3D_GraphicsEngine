@@ -1,0 +1,56 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <defs>
+    <!-- Gradients -->
+    <linearGradient id="cyan-glow" x1="0%" y1="0%" x2="50%" y2="100%">
+      <stop offset="0%" style="stop-color:#00f2ff;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#0072ff;stop-opacity:1" />
+    </linearGradient>
+    <linearGradient id="purple-glow" x1="100%" y1="0%" x2="50%" y2="100%">
+      <stop offset="0%" style="stop-color:#ff00ff;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#7000ff;stop-opacity:1" />
+    </linearGradient>
+    <linearGradient id="inner-highlight" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#ffffff;stop-opacity:0.8" />
+      <stop offset="50%" style="stop-color:#ffffff;stop-opacity:0.2" />
+      <stop offset="100%" style="stop-color:#ffffff;stop-opacity:0" />
+    </linearGradient>
+
+    <!-- Glow Filter -->
+    <filter id="neon-glow" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur in="SourceGraphic" stdDeviation="15" result="blur" />
+      <feComposite in="SourceGraphic" in2="blur" operator="over" />
+    </filter>
+    
+    <!-- Sharp Highlight Filter -->
+    <filter id="sharp-glow" x="-20%" y="-20%" width="140%" height="140%">
+      <feGaussianBlur in="SourceGraphic" stdDeviation="4" result="blur" />
+      <feMerge>
+        <feMergeNode in="blur" />
+        <feMergeNode in="SourceGraphic" />
+      </feMerge>
+    </filter>
+  </defs>
+
+  <!-- Background Glow (Ambient) -->
+  <g filter="url(#neon-glow)" opacity="0.6">
+    <path d="M100 80 L230 450 L282 450 L412 80 H350 L256 340 L162 80 Z" fill="#0072ff" />
+    <path d="M412 80 L282 450 L230 450 L100 80 H162 L256 340 L350 80 Z" fill="#7000ff" />
+  </g>
+
+  <!-- Left Blade (Cyan) -->
+  <path d="M100 80 C150 80 220 380 256 450 L230 450 C200 380 130 80 100 80 Z" fill="url(#cyan-glow)" filter="url(#sharp-glow)" />
+  
+  <!-- Right Blade (Purple) -->
+  <path d="M412 80 C362 80 292 380 256 450 L282 450 C312 380 382 80 412 80 Z" fill="url(#purple-glow)" filter="url(#sharp-glow)" />
+
+  <!-- Center Core (Transparent/Reflective) -->
+  <path d="M162 80 L256 340 L350 80 H310 L256 240 L202 80 Z" fill="rgba(255,255,255,0.1)" stroke="white" stroke-width="2" opacity="0.5" />
+
+  <!-- Highlights/Glints -->
+  <circle cx="160" cy="110" r="15" fill="white" filter="url(#sharp-glow)" />
+  <circle cx="256" cy="380" r="20" fill="white" filter="url(#neon-glow)" />
+  <circle cx="350" cy="110" r="15" fill="white" filter="url(#sharp-glow)" />
+
+  <!-- Internal Reflections -->
+  <path d="M115 90 C150 90 200 300 230 400 L240 380 C210 280 160 90 115 90 Z" fill="url(#inner-highlight)" opacity="0.6" />
+</svg>

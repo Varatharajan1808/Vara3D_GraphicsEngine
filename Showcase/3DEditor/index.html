@@ -1,0 +1,627 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>3D Editor - WebGL Framework</title>
+  <link rel="stylesheet" href="../../engine/UserInterface/styles/theme.css" />
+  <link rel="stylesheet" href="../../engine/UserInterface/styles/main.css" />
+  <link rel="stylesheet" href="../../engine/UserInterface/styles/components.css" />
+  <link rel="icon" type="image/svg+xml" href="./favicon.svg" />
+  <link rel="shortcut icon" type="image/svg+xml" href="./favicon.svg" />
+  <style>
+    /* Top Menu Bar */
+    #top-menu-bar {
+      display: flex;
+      align-items: center;
+      padding: 0 var(--spacing-sm);
+      gap: var(--spacing-xs);
+    }
+
+    .menu-item {
+      position: relative;
+    }
+
+    .menu-btn {
+      padding: 8px 12px;
+      background: transparent;
+      border: none;
+      color: var(--text-primary);
+      cursor: pointer;
+      font-size: var(--font-size-sm);
+      transition: background-color var(--transition-fast);
+    }
+
+    .menu-btn:hover {
+      background-color: var(--bg-hover);
+    }
+
+    /* Left Toolbar */
+    #left-toolbar {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: var(--spacing-sm) 0;
+      gap: var(--spacing-xs);
+    }
+
+    .toolbar-btn {
+      width: 40px;
+      height: 40px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: var(--bg-tertiary);
+      border: 1px solid var(--border-color);
+      border-radius: var(--radius-sm);
+      color: var(--text-primary);
+      cursor: pointer;
+      transition: all var(--transition-fast);
+      font-size: 18px;
+    }
+
+    .toolbar-btn:hover {
+      background: var(--bg-hover);
+      border-color: var(--border-light);
+    }
+
+    .toolbar-btn.active {
+      background: var(--accent-primary);
+      color: var(--text-white);
+      border-color: var(--accent-primary);
+    }
+
+    /* Right Panel */
+    #right-panel {
+      display: flex;
+      flex-direction: column;
+    }
+
+    .panel-section {
+      flex: 1;
+      overflow-y: auto;
+      overflow-x: hidden;
+    }
+
+    /* Status Bar */
+    #status-bar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 var(--spacing-md);
+      font-size: var(--font-size-xs);
+      color: var(--text-secondary);
+    }
+
+    .status-item {
+      display: flex;
+      align-items: center;
+      gap: var(--spacing-sm);
+      padding: 0 var(--spacing-sm);
+    }
+
+    .status-label {
+      color: var(--text-secondary);
+    }
+
+    .status-value {
+      color: var(--text-primary);
+      font-weight: 600;
+    }
+
+    .toggle-switch {
+      position: relative;
+      width: 40px;
+      height: 20px;
+      background: var(--bg-tertiary);
+      border-radius: 10px;
+      cursor: pointer;
+      transition: background-color var(--transition-fast);
+    }
+
+    .toggle-switch.active {
+      background: var(--accent-primary);
+    }
+
+    .toggle-switch::after {
+      content: '';
+      position: absolute;
+      width: 16px;
+      height: 16px;
+      background: var(--text-white);
+      border-radius: 50%;
+      top: 2px;
+      left: 2px;
+      transition: transform var(--transition-fast);
+    }
+
+    .toggle-switch.active::after {
+      transform: translateX(20px);
+    }
+
+    /* File input hidden */
+    #gltf-file-input {
+      display: none;
+    }
+
+    /* Scene Graph */
+    .scene-graph-container {
+      padding: var(--spacing-sm);
+    }
+
+    /* Property inputs */
+    .property-input-group {
+      display: grid;
+      grid-template-columns: 1fr 1fr 1fr;
+      gap: var(--spacing-xs);
+    }
+
+    .property-input {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+    }
+
+    .property-input label {
+      font-size: var(--font-size-xs);
+      color: var(--text-secondary);
+    }
+
+    .property-input input {
+      width: 100%;
+    }
+
+    /* Texture Library Styles */
+    .texture-library-container {
+      margin-top: var(--spacing-sm);
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(60px, 1fr));
+      gap: var(--spacing-xs);
+      max-height: 150px;
+      overflow-y: auto;
+      padding: var(--spacing-xs);
+      background: var(--bg-tertiary);
+      border-radius: var(--radius-sm);
+    }
+
+    .texture-item {
+      aspect-ratio: 1/1;
+      border: 1px solid var(--border-color);
+      border-radius: var(--radius-xs);
+      cursor: pointer;
+      overflow: hidden;
+      transition: all var(--transition-fast);
+      position: relative;
+    }
+
+    .texture-item:hover {
+      border-color: var(--accent-primary);
+      transform: scale(0.95);
+    }
+
+    .texture-item.active {
+      border-color: var(--accent-primary);
+      box-shadow: 0 0 0 2px var(--accent-primary);
+    }
+
+    .texture-item img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+    }
+
+    .texture-item-label {
+      position: absolute;
+      bottom: 0;
+      left: 0;
+      right: 0;
+      background: rgba(0, 0, 0, 0.7);
+      color: white;
+      font-size: 8px;
+      padding: 2px;
+      text-align: center;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .none-item {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: var(--bg-secondary);
+      color: var(--text-secondary);
+    }
+
+    .none-icon {
+      font-size: 24px;
+      font-weight: bold;
+      opacity: 0.5;
+    }
+
+    .none-item:hover .none-icon {
+      opacity: 1;
+      color: var(--accent-primary);
+    }
+  </style>
+</head>
+
+<body>
+  <div id="app-container">
+    <!-- Top Menu Bar -->
+    <div id="top-menu-bar">
+      <!-- File Menu -->
+      <div class="menu-item">
+        <button class="menu-btn" id="file-menu-btn">File</button>
+        <div class="dropdown-menu" id="file-menu">
+          <button class="dropdown-item" id="new-scene-btn">New Scene</button>
+          <div class="dropdown-divider"></div>
+          <button class="dropdown-item" id="import-gltf-btn">Import GLTF</button>
+          <button class="dropdown-item" id="export-gltf-btn">Export GLTF</button>
+        </div>
+      </div>
+
+      <!-- Add Menu -->
+      <div class="menu-item">
+        <button class="menu-btn" id="add-menu-btn">Add</button>
+        <div class="dropdown-menu" id="add-menu">
+          <div class="dropdown-header">Meshes</div>
+          <button class="dropdown-item" data-type="mesh" data-geometry="box">Box</button>
+          <button class="dropdown-item" data-type="mesh" data-geometry="sphere">Sphere</button>
+          <button class="dropdown-item" data-type="mesh" data-geometry="plane">Plane</button>
+          <button class="dropdown-item" data-type="mesh" data-geometry="cone">Cone</button>
+          <button class="dropdown-item" data-type="mesh" data-geometry="cylinder">Cylinder</button>
+          <div class="dropdown-divider"></div>
+          <div class="dropdown-header">Lights</div>
+          <button class="dropdown-item" data-type="light" data-light="point">Point Light</button>
+          <button class="dropdown-item" data-type="light" data-light="spot">Spot Light</button>
+          <button class="dropdown-item" data-type="light" data-light="directional">Directional Light</button>
+          <div class="dropdown-divider"></div>
+          <div class="dropdown-header">Camera</div>
+          <button class="dropdown-item" data-type="camera" data-camera="perspective">Perspective</button>
+          <button class="dropdown-item" data-type="camera" data-camera="orthographic">Orthographic</button>
+        </div>
+      </div>
+
+      <!-- Grid Toggle -->
+      <div class="menu-item"
+        style="display: flex; align-items: center; gap: 8px; margin-left: auto; padding-right: 12px;">
+        <span style="color: var(--text-secondary); font-size: var(--font-size-sm);">Grid Helper</span>
+        <div class="toggle-switch" id="grid-visible-toggle" title="Toggle Grid Visibility"></div>
+      </div>
+    </div>
+
+    <!-- Left Toolbar -->
+    <div id="left-toolbar">
+      <button class="toolbar-btn active" id="translate-tool" title="Translate (T)">↔</button>
+      <button class="toolbar-btn" id="rotate-tool" title="Rotate (R)">↻</button>
+      <button class="toolbar-btn" id="scale-tool" title="Scale (S)">⇄</button>
+    </div>
+
+    <!-- Viewport -->
+    <div id="viewport-container">
+      <canvas id="Mycanvas"></canvas>
+      <!-- Hidden element for backward compatibility with Webgl.ts -->
+      <div id="element" style="display: none;"></div>
+    </div>
+
+    <!-- Right Panel -->
+    <div id="right-panel">
+      <!-- Scene Graph -->
+      <div class="panel">
+        <div class="panel-header">
+          <span class="panel-title">Scene Graph</span>
+          <span class="panel-icon">▼</span>
+        </div>
+        <div class="panel-content">
+          <div class="scene-graph-container">
+            <ul class="tree-view" id="scene-tree">
+              <!-- Scene graph items will be populated here -->
+            </ul>
+          </div>
+        </div>
+      </div>
+
+      <!-- Object Properties -->
+      <div class="panel" id="object-properties-panel">
+        <div class="panel-header">
+          <span class="panel-title">Object Properties</span>
+          <span class="panel-icon">▼</span>
+        </div>
+        <div class="panel-content">
+          <div class="property-row">
+            <span class="property-label">Type:</span>
+            <span class="property-value" id="object-type">-</span>
+          </div>
+          <div class="property-row">
+            <span class="property-label">UUID:</span>
+            <span class="property-value" id="object-uuid">-</span>
+          </div>
+          <div class="separator"></div>
+          <div class="input-label">Position</div>
+          <div class="property-input-group">
+            <div class="property-input">
+              <label>X</label>
+              <input type="number" id="pos-x" class="input" value="0.0" step="0.1" />
+            </div>
+            <div class="property-input">
+              <label>Y</label>
+              <input type="number" id="pos-y" class="input" value="0.0" step="0.1" />
+            </div>
+            <div class="property-input">
+              <label>Z</label>
+              <input type="number" id="pos-z" class="input" value="0.0" step="0.1" />
+            </div>
+          </div>
+          <div class="input-label">Rotation</div>
+          <div class="property-input-group">
+            <div class="property-input">
+              <label>X</label>
+              <input type="number" id="rot-x" class="input" value="0.0" step="1" />
+            </div>
+            <div class="property-input">
+              <label>Y</label>
+              <input type="number" id="rot-y" class="input" value="0.0" step="1" />
+            </div>
+            <div class="property-input">
+              <label>Z</label>
+              <input type="number" id="rot-z" class="input" value="0.0" step="1" />
+            </div>
+          </div>
+          <div class="input-label">Scale</div>
+          <div class="property-input-group">
+            <div class="property-input">
+              <label>X</label>
+              <input type="number" id="scale-x" class="input" value="1.0" step="0.1" />
+            </div>
+            <div class="property-input">
+              <label>Y</label>
+              <input type="number" id="scale-y" class="input" value="1.0" step="0.1" />
+            </div>
+            <div class="property-input">
+              <label>Z</label>
+              <input type="number" id="scale-z" class="input" value="1.0" step="0.1" />
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Material Properties -->
+      <div class="panel" id="material-properties-panel">
+        <div class="panel-header">
+          <span class="panel-title">Material Properties</span>
+          <span class="panel-icon">▼</span>
+        </div>
+        <div class="panel-content">
+          <div class="property-row">
+            <span class="property-label">Base Color</span>
+            <label class="color-picker-wrapper" for="base-color-input">
+              <div class="color-swatch" id="base-color-swatch" style="background-color: #ffffff;"></div>
+              <input type="color" id="base-color-input" class="color-input" value="#ffffff" />
+            </label>
+          </div>
+          <div class="property-row">
+            <span class="property-label">Metallic</span>
+            <div style="flex: 1; display: flex; align-items: center; gap: 8px;">
+              <input type="range" id="metallic-slider" class="slider" min="0" max="1" step="0.01" value="0.5" />
+              <span id="metallic-value" style="min-width: 40px;">0.50</span>
+            </div>
+          </div>
+          <div class="property-row">
+            <span class="property-label">Roughness</span>
+            <div style="flex: 1; display: flex; align-items: center; gap: 8px;">
+              <input type="range" id="roughness-slider" class="slider" min="0" max="1" step="0.01" value="0.5" />
+              <span id="roughness-value" style="min-width: 40px;">0.50</span>
+            </div>
+          </div>
+          <div class="property-row">
+            <span class="property-label">Specular</span>
+            <div style="flex: 1; display: flex; align-items: center; gap: 8px;">
+              <input type="range" id="specular-slider" class="slider" min="0" max="32" step="1" value="16" />
+              <span id="specular-value" style="min-width: 40px;">16</span>
+            </div>
+          </div>
+          <div class="property-row">
+            <span class="property-label">Alpha</span>
+            <div style="flex: 1; display: flex; align-items: center; gap: 8px;">
+              <input type="range" id="alpha-slider" class="slider" min="0" max="1" step="0.01" value="1.0" />
+              <span id="alpha-value" style="min-width: 40px;">1.00</span>
+            </div>
+          </div>
+          <div class="property-row">
+            <span class="property-label">Emission Color</span>
+            <label class="color-picker-wrapper" for="emission-color-input">
+              <div class="color-swatch" id="emission-color-swatch" style="background-color: #000000;"></div>
+              <input type="color" id="emission-color-input" class="color-input" value="#000000" />
+            </label>
+          </div>
+          <div class="property-row">
+            <span class="property-label">Emission Intensity</span>
+            <div style="flex: 1; display: flex; align-items: center; gap: 8px;">
+              <input type="range" id="emission-intensity-slider" class="slider" min="0" max="10" step="0.1"
+                value="0.0" />
+              <span id="emission-intensity-value" style="min-width: 40px;">0.0</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Texture Properties -->
+      <div class="panel" id="texture-properties-panel">
+        <div class="panel-header">
+          <span class="panel-title">Texture Properties</span>
+          <span class="panel-icon">▼</span>
+        </div>
+        <div class="panel-content">
+          <div class="property-row">
+            <span class="property-label">Texture</span>
+            <button class="btn" id="load-texture-btn">Upload</button>
+            <input type="file" id="texture-file-input" accept="image/*" style="display: none;" />
+          </div>
+          <!-- Texture Library -->
+          <div class="input-label" style="margin-top: 8px;">Texture Library</div>
+          <div class="texture-library-container" id="texture-library">
+            <!-- Items injected by EditorUIController -->
+          </div>
+
+          <div class="property-row" style="margin-top: 16px;">
+            <span class="property-label">Normal Map</span>
+            <button class="btn" id="load-normal-btn">Upload</button>
+            <input type="file" id="normal-file-input" accept="image/*" style="display: none;" />
+          </div>
+          <!-- Normal Map Library -->
+          <div class="input-label" style="margin-top: 8px;">Normal Library</div>
+          <div class="texture-library-container" id="normal-library">
+            <!-- Items injected by EditorUIController -->
+          </div>
+        </div>
+      </div>
+
+      <!-- Light Properties -->
+      <div class="panel" id="light-properties-panel" style="display: none;">
+        <div class="panel-header">
+          <span class="panel-title">Light Properties</span>
+          <span class="panel-icon">▼</span>
+        </div>
+        <div class="panel-content">
+          <div class="property-row">
+            <span class="property-label">Light Type</span>
+            <span class="property-value" id="light-type">-</span>
+          </div>
+
+          <!-- Position (Point and Spot Lights) -->
+          <div id="light-position-group">
+            <div class="input-label">Position</div>
+            <div class="property-input-group">
+              <div class="property-input">
+                <label>X</label>
+                <input type="number" id="light-pos-x" class="input" value="0.0" step="0.1" />
+              </div>
+              <div class="property-input">
+                <label>Y</label>
+                <input type="number" id="light-pos-y" class="input" value="0.0" step="0.1" />
+              </div>
+              <div class="property-input">
+                <label>Z</label>
+                <input type="number" id="light-pos-z" class="input" value="0.0" step="0.1" />
+              </div>
+            </div>
+          </div>
+
+          <!-- Direction (Spot and Directional Lights) -->
+          <div id="light-direction-group" style="display: none;">
+            <div class="input-label">Direction</div>
+            <div class="property-input-group">
+              <div class="property-input">
+                <label>X</label>
+                <input type="number" id="light-dir-x" class="input" value="0.0" step="0.1" />
+              </div>
+              <div class="property-input">
+                <label>Y</label>
+                <input type="number" id="light-dir-y" class="input" value="0.0" step="0.1" />
+              </div>
+              <div class="property-input">
+                <label>Z</label>
+                <input type="number" id="light-dir-z" class="input" value="0.0" step="0.1" />
+              </div>
+            </div>
+          </div>
+
+          <!-- Radius (Point Light) -->
+          <div id="light-radius-group" style="display: none;">
+            <div class="property-row">
+              <span class="property-label">Radius</span>
+              <div style="flex: 1; display: flex; align-items: center; gap: 8px;">
+                <input type="range" id="light-radius-slider" class="slider" min="0" max="10" step="0.1" value="2.0" />
+                <span id="light-radius-value" style="min-width: 40px;">2.0</span>
+              </div>
+            </div>
+          </div>
+
+          <!-- Angle (Spot Light) -->
+          <div id="light-angle-group" style="display: none;">
+            <div class="property-row">
+              <span class="property-label">Angle (degrees)</span>
+              <div style="flex: 1; display: flex; align-items: center; gap: 8px;">
+                <input type="range" id="light-angle-slider" class="slider" min="0" max="180" step="1" value="36" />
+                <span id="light-angle-value" style="min-width: 40px;">36</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="property-row">
+            <span class="property-label">Color</span>
+            <label class="color-picker-wrapper" for="light-color-input">
+              <div class="color-swatch" id="light-color-swatch" style="background-color: #ffffff;"></div>
+              <input type="color" id="light-color-input" class="color-input" value="#ffffff" />
+            </label>
+          </div>
+          <div class="property-row">
+            <span class="property-label">Intensity</span>
+            <div style="flex: 1; display: flex; align-items: center; gap: 8px;">
+              <input type="range" id="light-intensity-slider" class="slider" min="0" max="10" step="0.1" value="1.0" />
+              <span id="light-intensity-value" style="min-width: 40px;">1.0</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Camera Properties -->
+      <div class="panel" id="camera-properties-panel" style="display: none;">
+        <div class="panel-header">
+          <span class="panel-title">Camera Properties</span>
+          <span class="panel-icon">▼</span>
+        </div>
+        <div class="panel-content">
+          <div class="property-row">
+            <span class="property-label">Camera Type</span>
+            <span class="property-value" id="camera-type">-</span>
+          </div>
+          <div class="input-label">Position</div>
+          <div class="property-input-group">
+            <div class="property-input">
+              <label>X</label>
+              <input type="number" id="camera-pos-x" class="input" value="0.0" step="0.1" />
+            </div>
+            <div class="property-input">
+              <label>Y</label>
+              <input type="number" id="camera-pos-y" class="input" value="0.0" step="0.1" />
+            </div>
+            <div class="property-input">
+              <label>Z</label>
+              <input type="number" id="camera-pos-z" class="input" value="0.0" step="0.1" />
+            </div>
+          </div>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- Status Bar -->
+    <div id="status-bar">
+      <div style="display: flex; gap: var(--spacing-lg);">
+        <div class="status-item">
+          <span class="status-label">FPS:</span>
+          <span class="status-value" id="fps-value">0</span>
+        </div>
+        <div class="status-item">
+          <span class="status-label">Draw Calls:</span>
+          <span class="status-value" id="draw-calls-value">0</span>
+        </div>
+      </div>
+      <div class="status-item">
+        <span class="status-label">WebGL</span>
+        <div class="toggle-switch" id="webgl-toggle"></div>
+        <span class="status-label">WebGPU</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- Hidden file input for GLTF import -->
+  <input type="file" id="gltf-file-input" accept=".gltf,.glb" />
+
+  <script type="module" src="./EditorApplication.js"></script>
+</body>
+
+</html>
