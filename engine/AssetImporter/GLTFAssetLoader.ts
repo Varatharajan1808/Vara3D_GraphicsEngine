@@ -62,6 +62,7 @@ interface GLTFScene {
 interface GLTFAccessor {
   bufferView: number;
   byteOffset?: number;
+  componentType?: number;
   count: number;
 }
 
@@ -129,7 +130,7 @@ interface MeshData {
   normals: Float32Array;
   texcoords: Float32Array;
   tangents: Float32Array;
-  indices: Uint16Array | null;
+  indices: Uint16Array | Uint32Array | null;
   vertexCount: number;
   modelMatrix: Float32Array;
   localMatrix: Float32Array;
@@ -152,7 +153,7 @@ interface MeshData {
 interface GeometryData {
   type: string;
   Vertices: Float32Array;
-  Indices: Uint16Array | null;
+  Indices: Uint16Array | Uint32Array | null;
   Normals: Float32Array;
   TextureCoordinates: Float32Array;
   Tangents: Float32Array;
@@ -218,7 +219,8 @@ export class GLTFAssetLoader {
   }
   async processTextures(
     gltfData: GLTFData,
-    bufferData: ArrayBuffer
+    bufferData: ArrayBuffer,
+    fileMap?: Map<string, File>
   ): Promise<(WebGLTexture | null)[]> {
     const textures: (WebGLTexture | null)[] = [];
     const textureURIs: (string | null)[] = [];
@@ -241,9 +243,23 @@ export class GLTFAssetLoader {
       try {
         if (image.uri) {
           let uri = image.uri;
+          let loadUrl = image.uri;
+
+          // Resolve external image files from the fileMap
+          if (!uri.startsWith("data:") && fileMap) {
+            const fileName = uri.split("/").pop() || uri;
+            const file = fileMap.get(fileName) || fileMap.get(uri);
+            if (file) {
+              loadUrl = URL.createObjectURL(file);
+            }
+          }
+
           if (uri.startsWith("data:image/")) uri = uri.split(",")[1];
           textureURIs[i] = uri;
-          textures[i] = await this.loadTexture.loadTexture(this.gl, image.uri);
+          textures[i] = await this.loadTexture.loadTexture(this.gl, loadUrl);
+
+          // Revoke blob URL if we created one
+          if (loadUrl !== image.uri) URL.revokeObjectURL(loadUrl);
         } else if (image.bufferView !== undefined) {
           const view = gltfData.bufferViews[image.bufferView];
           const imageBuffer = new Uint8Array(
@@ -268,15 +284,62 @@ export class GLTFAssetLoader {
     this.textureURIs = textureURIs;
     return textures;
   }
-  async main(urls: string[]): Promise<void> {
+  /**
+   * Resolve buffer data from a GLTF buffer URI.
+   * Handles: data URIs (base64) and external files (via fileMap).
+   */
+  private async resolveBufferData(
+    bufferUri: string,
+    fileMap?: Map<string, File>
+  ): Promise<ArrayBuffer> {
+    // Case 1: Embedded base64 data URI
+    if (bufferUri.startsWith("data:")) {
+      return this.decodeBase64(bufferUri);
+    }
+
+    // Case 2: External file reference — look up in the user-provided fileMap
+    if (fileMap) {
+      const fileName = bufferUri.split("/").pop() || bufferUri;
+      const file = fileMap.get(fileName) || fileMap.get(bufferUri);
+      if (file) {
+        return await file.arrayBuffer();
+      }
+    }
+
+    // No match found — give a helpful error
+    throw new Error(
+      `Cannot resolve buffer "${bufferUri}". ` +
+      `This GLTF file references an external .bin file. ` +
+      `Please select both the .gltf and .bin files together when importing.`
+    );
+  }
+
+  async main(urls: string[], fileMap?: Map<string, File>): Promise<void> {
     for (const url of urls) {
       try {
         const gltfData = await this.loadGLTF(url);
-        const bufferData = this.decodeBase64(gltfData.buffers[0].uri);
-        const textures = await this.processTextures(gltfData, bufferData);
+        const bufferData = await this.resolveBufferData(
+          gltfData.buffers[0].uri,
+          fileMap
+        );
+        const textures = await this.processTextures(gltfData, bufferData, fileMap);
 
         this.nodeMap.clear();
         this.buffer = [];
+
+        // Create a root wrapper node for the entire GLTF import
+        // Extract a readable name from the URL or fileMap
+        let rootName = "GLTF_Import";
+        if (fileMap) {
+          for (const [name] of fileMap) {
+            if (name.endsWith(".gltf") || name.endsWith(".glb")) {
+              rootName = name.replace(/\.(gltf|glb)$/i, "");
+              break;
+            }
+          }
+        }
+        const rootNode = new SceneNode(rootName);
+        this.scene.add(rootNode);
 
         for (let i = 0; i < gltfData.scenes.length; i++) {
           const scene = gltfData.scenes[i];
@@ -284,13 +347,16 @@ export class GLTFAssetLoader {
             const nodeIndex = scene.nodes[j];
             this.processNode(
               nodeIndex,
-              null,
+              rootNode,
               gltfData,
               bufferData,
               textures
             );
           }
         }
+
+        // Update world matrices from the root down
+        rootNode.updateWorldMatrix();
       } catch (err) {
         console.error(`GLTF Load Error (${url}):`, err);
       }
@@ -460,9 +526,19 @@ export class GLTFAssetLoader {
     const geometry = this.createGeometry(meshData);
     const material = this.createMaterial(meshData);
 
+    const pbrMaterial = new PBRMaterialProperties(
+      material.color as [number, number, number],
+      material.metallic,
+      material.roughness,
+      material.specular,
+      material.alpha,
+      material.emissionColor as [number, number, number],
+      material.emissionIntensity
+    );
+
     const mesh = new RenderableMeshObject(
       geometry,
-      new PBRMaterialProperties(material.color as [number, number, number]),
+      pbrMaterial,
       meshData.texture,
       meshData.normalMap,
       meshData.imageUri as unknown as HTMLImageElement | null | undefined,
@@ -569,7 +645,7 @@ export class GLTFAssetLoader {
         gltfData,
         bufferData,
         primitive.attributes.TANGENT,
-        3
+        4
       ),
       indices: indicesArray === null ? undefined : indicesArray,
     };
@@ -613,7 +689,7 @@ export class GLTFAssetLoader {
     gltfData: GLTFData,
     bufferData: ArrayBuffer,
     indexAccessorIdx: number | undefined
-  ): Uint16Array | null {
+  ): Uint16Array | Uint32Array | null {
     if (indexAccessorIdx === undefined) return null;
 
     const accessor = gltfData.accessors[indexAccessorIdx];
@@ -621,26 +697,35 @@ export class GLTFAssetLoader {
 
     const byteOffset = (view.byteOffset || 0) + (accessor.byteOffset || 0);
     const count = accessor.count;
-    const aligned = byteOffset % 2 === 0;
+    // 5125 = UNSIGNED_INT (Uint32), 5123 = UNSIGNED_SHORT (Uint16)
+    const isUint32 = accessor.componentType === 5125;
+    const bytesPerElement = isUint32 ? 4 : 2;
+    const alignment = isUint32 ? 4 : 2;
+    const aligned = byteOffset % alignment === 0;
 
     if (aligned) {
       try {
-        return new Uint16Array(bufferData, byteOffset, count);
+        return isUint32
+          ? new Uint32Array(bufferData, byteOffset, count)
+          : new Uint16Array(bufferData, byteOffset, count);
       } catch (e) {
-        // Handle alignment issues by falling back to copying
         const sliced = new Uint8Array(bufferData).slice(
           byteOffset,
-          byteOffset + count * 2
+          byteOffset + count * bytesPerElement
         );
-        return new Uint16Array(sliced.buffer);
+        return isUint32
+          ? new Uint32Array(sliced.buffer)
+          : new Uint16Array(sliced.buffer);
       }
     }
 
     const sliced = new Uint8Array(bufferData).slice(
       byteOffset,
-      byteOffset + count * 2
+      byteOffset + count * bytesPerElement
     );
-    return new Uint16Array(sliced.buffer);
+    return isUint32
+      ? new Uint32Array(sliced.buffer)
+      : new Uint16Array(sliced.buffer);
   }
   createGeometry(meshData: MeshData): GeometryData {
     return {

@@ -70,6 +70,9 @@ export class WebGLRenderEngine {
     this.currentFps = 0;
     this.resize(this.window.innerWidth, this.window.innerHeight);
 
+    // Enable Uint32 index support for large meshes
+    this.gl.getExtension('OES_element_index_uint');
+
     // Create default textures
     this.defaultTexture = this.createDefaultTexture();
     this.defaultNormalMap = this.createDefaultNormalMap();
@@ -590,10 +593,12 @@ export class WebGLRenderEngine {
           this.gl.drawArrays(this.gl.LINES, 0, mesh.vertices.length / 3);
         } else {
           this.gl.bindBuffer(this.gl.ELEMENT_ARRAY_BUFFER, mesh.indexBuffer);
+          const indexType = mesh.indices instanceof Uint32Array
+            ? this.gl.UNSIGNED_INT : this.gl.UNSIGNED_SHORT;
           this.gl.drawElements(
             this.gl.TRIANGLES,
             mesh.indices.length,
-            this.gl.UNSIGNED_SHORT,
+            indexType,
             0
           );
         }
@@ -826,10 +831,12 @@ export class WebGLRenderEngine {
       this.gl.drawArrays(this.gl.LINES, 0, mesh.vertices.length / 2);
     } else {
       this.gl.bindBuffer(this.gl.ELEMENT_ARRAY_BUFFER, mesh.indexBuffer);
+      const indexType = mesh.indices instanceof Uint32Array
+        ? this.gl.UNSIGNED_INT : this.gl.UNSIGNED_SHORT;
       this.gl.drawElements(
         this.gl.TRIANGLES,
         mesh.indices.length,
-        this.gl.UNSIGNED_SHORT,
+        indexType,
         0
       );
     }

@@ -928,16 +928,72 @@ document.getElementById("import-gltf-btn")?.addEventListener("click", () => {
 });
 
 document.getElementById("gltf-file-input")?.addEventListener("change", async (e) => {
-  const file = (e.target as HTMLInputElement).files?.[0];
-  if (file) {
-    const url = URL.createObjectURL(file);
+  const files = (e.target as HTMLInputElement).files;
+  if (files && files.length > 0) {
+    // Build a file map for resolving external references (e.g. .bin files)
+    const fileMap = new Map<string, File>();
+    let gltfFile: File | null = null;
+
+    for (let i = 0; i < files.length; i++) {
+      const file = files[i];
+      fileMap.set(file.name, file);
+      if (file.name.endsWith(".gltf") || file.name.endsWith(".glb")) {
+        gltfFile = file;
+      }
+    }
+
+    // If no .gltf/.glb found, use the first file
+    if (!gltfFile) gltfFile = files[0];
+
+    const url = URL.createObjectURL(gltfFile);
     try {
-      await loader.main([url]);
+      await loader.main([url], fileMap);
       updateSceneGraph();
     } catch (error) {
       console.error("Error loading GLTF:", error);
     }
     URL.revokeObjectURL(url);
+    // Reset so same files can be selected again
+    (e.target as HTMLInputElement).value = "";
+  }
+});
+
+// Handle GLTF folder import
+document.getElementById("import-gltf-folder-btn")?.addEventListener("click", () => {
+  const folderInput = document.getElementById("gltf-folder-input") as HTMLInputElement;
+  folderInput.click();
+});
+
+document.getElementById("gltf-folder-input")?.addEventListener("change", async (e) => {
+  const files = (e.target as HTMLInputElement).files;
+  if (files && files.length > 0) {
+    // Build a file map from all files in the folder
+    const fileMap = new Map<string, File>();
+    let gltfFile: File | null = null;
+
+    for (let i = 0; i < files.length; i++) {
+      const file = files[i];
+      fileMap.set(file.name, file);
+      if (file.name.endsWith(".gltf") || file.name.endsWith(".glb")) {
+        gltfFile = file;
+      }
+    }
+
+    if (!gltfFile) {
+      console.error("No .gltf or .glb file found in the selected folder.");
+      (e.target as HTMLInputElement).value = "";
+      return;
+    }
+
+    const url = URL.createObjectURL(gltfFile);
+    try {
+      await loader.main([url], fileMap);
+      updateSceneGraph();
+    } catch (error) {
+      console.error("Error loading GLTF:", error);
+    }
+    URL.revokeObjectURL(url);
+    (e.target as HTMLInputElement).value = "";
   }
 });
 

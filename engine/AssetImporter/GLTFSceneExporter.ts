@@ -4,6 +4,7 @@ import { NormalsData } from "../GeometryPrimitives/SurfaceNormalCalculator";
 import { Tangents } from "../GeometryPrimitives/TangentSpaceCalculator";
 import { RenderableMeshObject } from "../MeshRenderer/RenderableMeshObject";
 import { PBRMaterialProperties } from "../MaterialSystem/PBRMaterialProperties";
+import { SceneNode } from "../SceneGraph/SceneNode";
 
 // ======================
 // Type Definitions
@@ -211,17 +212,23 @@ export class GLTFSceneExporter {
     this.normalMapTextureMap.clear();
   }
 
-  generateGLTF(meshes: any[]): GLTF {
+  generateGLTF(allNodes: any[]): GLTF {
     this.resetState();
 
-    const estimatedSize = this.estimateBufferSize(meshes);
+    // Separate mesh nodes from group nodes
+    const meshNodes = allNodes.filter(n => n.isMesh);
+
+    const estimatedSize = this.estimateBufferSize(meshNodes);
     this.bufferData = new Uint8Array(estimatedSize);
 
-    for (const mesh of meshes) {
+    for (const mesh of meshNodes) {
+      // Reset per-mesh bounding box
+      this.positionMin = [Infinity, Infinity, Infinity];
+      this.positionMax = [-Infinity, -Infinity, -Infinity];
       this.processMesh(mesh);
     }
 
-    return this.generateFinalGLTFStructure(meshes);
+    return this.generateFinalGLTFStructure(allNodes, meshNodes);
   }
 
   private estimateBufferSize(meshes: any[]): number {
@@ -521,11 +528,11 @@ export class GLTFSceneExporter {
     } as GltfIndex;
   }
 
-  private generateFinalGLTFStructure(meshes: any[]): GLTF {
+  private generateFinalGLTFStructure(allNodes: any[], meshNodes: any[]): GLTF {
     const buffer = this.bufferData!.buffer;
     const base64Buffer = this.bufferToBase64(buffer as ArrayBuffer);
 
-    const meshesGLTF: GLTFMesh[] = meshes.map((mesh) => ({
+    const meshesGLTF: GLTFMesh[] = meshNodes.map((mesh) => ({
       name: mesh.name,
       primitives: [
         {
@@ -548,7 +555,7 @@ export class GLTFSceneExporter {
       ],
     }));
 
-    const { nodes, rootNodes } = this.createNodes(meshes);
+    const { nodes, rootNodes } = this.createNodes(allNodes, meshNodes);
 
     return {
       asset: { version: "2.0", generator: "WebGL Exporter" },
@@ -581,45 +588,57 @@ export class GLTFSceneExporter {
     };
   }
 
-  private createNodes(meshes: any[]): { nodes: Node[]; rootNodes: number[] } {
+  private createNodes(allNodes: any[], meshNodes: any[]): { nodes: Node[]; rootNodes: number[] } {
     const nodes: Node[] = [];
-    const nodeMap = new Map<string, number>();
+    const nodeIndexMap = new Map<string, number>(); // uuid -> gltf node index
+    const meshIndexMap = new Map<string, number>(); // uuid -> gltf mesh index
     const rootNodes: number[] = [];
 
-    this.computeRelativeTransforms(meshes);
+    // Build mesh index map (only mesh nodes get a mesh index)
+    meshNodes.forEach((mesh, idx) => {
+      meshIndexMap.set(mesh.uuid, idx);
+    });
 
-    for (let i = 0; i < meshes.length; i++) {
-      const mesh = meshes[i];
+    this.computeRelativeTransforms(allNodes);
+
+    // Create GLTF nodes for ALL nodes (mesh + group)
+    for (let i = 0; i < allNodes.length; i++) {
+      const obj = allNodes[i];
       const node: Node = {
-        mesh: i,
-        name: mesh.name,
+        mesh: meshIndexMap.has(obj.uuid) ? meshIndexMap.get(obj.uuid)! : -1,
+        name: obj.name,
       };
 
-      if (mesh.relativeTransform) {
-        if (mesh.relativeTransform.translation)
-          node.translation = mesh.relativeTransform.translation;
-        if (mesh.relativeTransform.rotation)
-          node.rotation = mesh.relativeTransform.rotation;
-        if (mesh.relativeTransform.scale)
-          node.scale = mesh.relativeTransform.scale;
+      // Remove mesh field for group nodes
+      if (!meshIndexMap.has(obj.uuid)) {
+        delete (node as any).mesh;
       }
 
-      if (meshes.some((m: any) => m.parent?.uuid === mesh.uuid)) {
-        node.children = [];
+      if (obj.relativeTransform) {
+        if (obj.relativeTransform.translation)
+          node.translation = obj.relativeTransform.translation;
+        if (obj.relativeTransform.rotation)
+          node.rotation = obj.relativeTransform.rotation;
+        if (obj.relativeTransform.scale)
+          node.scale = obj.relativeTransform.scale;
       }
 
-      nodeMap.set(mesh.uuid, i);
+      nodeIndexMap.set(obj.uuid, i);
       nodes.push(node);
 
-      if (!mesh.parent) {
+      if (!obj.parent) {
         rootNodes.push(i);
       }
     }
 
-    for (let i = 0; i < meshes.length; i++) {
-      const mesh = meshes[i];
-      if (mesh.parent && nodeMap.has(mesh.parent.uuid)) {
-        const parentIndex = nodeMap.get(mesh.parent.uuid)!;
+    // Set up children references
+    for (let i = 0; i < allNodes.length; i++) {
+      const obj = allNodes[i];
+      if (obj.parent && nodeIndexMap.has(obj.parent.uuid)) {
+        const parentIndex = nodeIndexMap.get(obj.parent.uuid)!;
+        if (!nodes[parentIndex].children) {
+          nodes[parentIndex].children = [];
+        }
         nodes[parentIndex].children!.push(i);
       }
     }
@@ -697,61 +716,91 @@ export class GLTFSceneExporter {
   }
 
   exportSceneToGLTF(scene: any): any[] {
-    const objectMap = new Map<string, any>();
+    const allNodes: any[] = [];
+    const nodeMap = new Map<string, any>();
 
-    for (const object of scene.objects) {
+    // Recursively collect all nodes from the scene tree
+    const collectNode = (node: any) => {
       // Skip gizmo parts and grid geometry
-      if (object.isGizmoPart || object.type === "Grid-Geometry") {
-        continue;
-      }
+      if (node.isGizmoPart || node.type === "Grid-Geometry") return;
 
-      if (object.geometry && object instanceof RenderableMeshObject) {
-        const geometryData = object.geometry;
-        const materialData = object.material ?? {};
+      if (node instanceof RenderableMeshObject && node.geometry) {
+        const materialData = node.material ?? {};
+        const geometryData = node.geometry;
 
         const meshObject = {
-          uuid: object.uuid,
-          name: object.type ?? "Mesh",
+          uuid: node.uuid,
+          name: node.name || node.type || "Mesh",
+          isMesh: true,
           vertices: geometryData.Vertices ?? [],
           normals: geometryData.Normals ?? NormalsData ?? [],
-          texCoords:
-            geometryData.TextureCoordinates ?? TextureCoordinates ?? [],
+          texCoords: geometryData.TextureCoordinates ?? TextureCoordinates ?? [],
           tangents: geometryData.Tangents ?? Tangents ?? [],
           indices: geometryData.Indices ?? [],
-          color: materialData.color ?? [1, 1, 1, 1],
+          color: materialData.color ?? [1, 1, 1],
           metallic: materialData.metallic ?? 0.5,
           roughness: materialData.roughness ?? 0.5,
           specular: materialData.specular ?? 16.0,
           alpha: materialData.alpha ?? 1.0,
-          emissionColor: materialData.emissionColor ?? [0.5, 0.5, 0.0],
+          emissionColor: materialData.emissionColor ?? [0.0, 0.0, 0.0],
           emissionIntensity: materialData.emissionIntensity ?? 0.0,
-          texture: object.texture ?? null,
-          image: object.image ?? null,
-          textureURL: (object as any).textureURL ?? null,
-          normalMap: object.normalMap ?? null,
-          normalMapImage: object.normalMapImage ?? null,
-          normalMapURL: (object as any).normalMapURL ?? null,
-          localMatrix: object.localMatrix ?? [],
-          parent: null,
+          texture: node.texture ?? null,
+          image: node.image ?? null,
+          textureURL: (node as any).textureURL ?? null,
+          normalMap: node.normalMap ?? null,
+          normalMapImage: node.normalMapImage ?? null,
+          normalMapURL: (node as any).normalMapURL ?? null,
+          localMatrix: node.localMatrix ?? [],
+          parent: null as any,
+          children: [] as any[],
+          sceneNode: node,
         };
 
-        this.meshes.push(meshObject);
-        objectMap.set(object.uuid, meshObject);
+        allNodes.push(meshObject);
+        nodeMap.set(node.uuid, meshObject);
+      } else {
+        // Group node (SceneNode without render data)
+        const groupObject = {
+          uuid: node.uuid,
+          name: node.name || "Group",
+          isMesh: false,
+          localMatrix: node.localMatrix ?? [],
+          parent: null as any,
+          children: [] as any[],
+          sceneNode: node,
+        };
+
+        allNodes.push(groupObject);
+        nodeMap.set(node.uuid, groupObject);
       }
+
+      // Recurse into children
+      if (node.children) {
+        for (const child of node.children) {
+          collectNode(child);
+        }
+      }
+    };
+
+    // Walk from root nodes
+    const roots = scene.getRootNodes ? scene.getRootNodes() : (scene.nodes || []).filter((n: any) => !n.parent);
+    for (const root of roots) {
+      collectNode(root);
     }
 
-    for (const object of scene.objects) {
-      if (
-        object.parent &&
-        objectMap.has(object.uuid) &&
-        objectMap.has(object.parent.uuid)
-      ) {
-        const meshObject = objectMap.get(object.uuid)!;
-        meshObject.parent = objectMap.get(object.parent.uuid)!;
+    // Set up parent references
+    for (const obj of allNodes) {
+      const sceneNode = obj.sceneNode;
+      if (sceneNode.parent && nodeMap.has(sceneNode.parent.uuid)) {
+        obj.parent = nodeMap.get(sceneNode.parent.uuid);
       }
+      // Clean up temporary reference
+      delete obj.sceneNode;
     }
 
-    return this.meshes;
+    // Only process mesh nodes for buffer data
+    this.meshes = allNodes.filter(n => n.isMesh);
+    return allNodes;
   }
 
   saveGLTF(fileName: string, meshes: any[]): void {

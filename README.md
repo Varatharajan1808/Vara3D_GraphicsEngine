@@ -1,103 +1,93 @@
-# 🎮 3D Web Engine & Editor
+# 3D Web Engine & Editor
 
 [![TypeScript](https://img.shields.io/badge/TypeScript-007ACC?style=for-the-badge&logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
 [![WebGL](https://img.shields.io/badge/WebGL-990000?style=for-the-badge&logo=webgl&logoColor=white)](https://developer.mozilla.org/en-US/docs/Web/API/WebGL_API)
-[![WebGPU](https://img.shields.io/badge/WebGPU-FFCC00?style=for-the-badge&logo=webgpu&logoColor=black)](https://gpuweb.github.io/gpuweb/)
-[![Vercel](https://img.shields.io/badge/Vercel-000000?style=for-the-badge&logo=vercel&logoColor=white)](https://vercel.com/)
 [![License: ISC](https://img.shields.io/badge/License-ISC-blue.svg?style=for-the-badge)](https://opensource.org/licenses/ISC)
 
-A high-performance, modular 3D engine built from the ground up with **Pure WebGL/WebGPU** and **TypeScript**. This project features a robust rendering pipeline, dual-backend support, a comprehensive scene graph, and a fully integrated visual editor for real-time 3D scene composition.
+I'm building a 3D engine and editor from scratch using TypeScript and raw WebGL — no Three.js, no Babylon, no wrapper libraries. The whole point is to learn how rendering actually works under the hood by writing everything myself: the math, the shaders, the scene graph, the material system, all of it.
 
-🚀 **[View Live Demo](https://varatha3deditor.vercel.app/)**
-
----
-
-## ✨ Key Features
-
-### 🏗️ Core Rendering Architecture
-- **Pure WebGL Pipeline**: Low-level implementation of the rendering lifecycle without external wrappers.
-- **PBR (Physically Based Rendering)**: Advanced material system supporting Metallic-Roughness workflow, specular mapping, and emissive properties.
-- **Dynamic Lighting**: Real-time support for Point, Spot, and Directional lights with specialized GLSL shaders.
-- **Frustum Culling**: Optimized rendering using view frustum culling to skip objects outside the camera's view.
-- **Hierarchical Scene Graph**: Powerful parent-child relationship management for complex 3D transformations.
-
-### 🛠️ Professional Visual Editor
-- **Real-time Scene Tree**: Hierarchical visualization and management of all scene nodes (Meshes, Lights, Cameras).
-- **Live Property Inspector**: Instant manipulation of transforms, materials, and light properties.
-- **Interactive Gizmos**: Industry-standard visual controls for Move (Translate), Rotate, and Scale operations.
-- **Asset Management**: Seamless **GLTF/GLB import and export** support for professional workflows.
-- **Texture Library**: Dynamic texture and normal map management with real-time preview.
-- **Performance Monitoring**: Integrated real-time FPS and draw call statistics.
+**Live demo:** [varatha3deditor.vercel.app](https://varatha3deditor.vercel.app/)
 
 ---
 
-## 📂 Project Architecture
+## What it does
 
-The project is architected with modularity and scalability in mind:
+- Renders 3D scenes using a custom WebGL 2.0 pipeline I wrote from scratch
+- PBR materials (metallic-roughness workflow, normal maps, emissive, etc.)
+- Point, spot, and directional lights with proper GLSL shaders
+- Frustum culling so it doesn't waste time rendering stuff off-screen
+- Full scene graph with parent-child transforms
+- A visual editor where you can add objects, move them around with gizmos, tweak materials, import/export GLTF files, and see everything update in real time
 
-```text
-WebGL-Engine/
-├── 🚀 Showcase/             # Live implementations and Editor UI
-├── ⚙️ engine/               # Core Engine Systems
-│   ├── RenderingPipeline/   # WebGL context, Shader linking, and GLSL library
-│   ├── MaterialSystem/      # PBR Material definitions
-│   ├── LightingEngine/      # Dynamic light management
-│   ├── CameraSystem/        # Perspective & Orthographic controllers
-│   ├── SceneGraph/          # Hierarchical Node management
-│   ├── AssetImporter/       # GLTF/GLB Serialization (Import/Export)
-│   ├── EventManager/        # Scene interaction and input handling
-│   ├── MathLibrary/         # Custom linear algebra for 3D graphics
-│   ├── GeometryPrimitives/  # Procedural geometry generation
-│   └── UserInterface/       # Integrated Editor UI framework using Vanilla CSS
-└── 📦 dist/                 # Optimized production bundles
+---
+
+## The editor
+
+The editor is the main way to interact with the engine right now. It has:
+
+- A scene tree panel that shows your hierarchy
+- A property inspector for transforms, materials, and light settings
+- Translate / Rotate / Scale gizmos
+- GLTF/GLB import and export
+- Texture and normal map management
+- FPS counter and draw call stats
+
+---
+
+## Project structure
+
+```
+├── engine/
+│   ├── RenderingPipeline/    # WebGL context, shader compilation, GLSL shaders
+│   ├── MaterialSystem/       # PBR material definitions
+│   ├── LightingEngine/       # Light types and management
+│   ├── CameraSystem/         # Perspective & orthographic cameras, orbit controls
+│   ├── SceneGraph/           # Node hierarchy and transforms
+│   ├── AssetImporter/        # GLTF/GLB loader and exporter
+│   ├── EventManager/         # Input handling
+│   ├── MathLibrary/          # Vec3, Mat4, quaternions — the usual
+│   ├── GeometryPrimitives/   # Box, sphere, plane, etc.
+│   └── UserInterface/        # Editor panels and controls
+├── Showcase/
+│   └── 3DEditor/             # The editor app
+└── dist/                     # Build output
 ```
 
 ---
 
-## 🛠️ Tech Stack
+## Tech used
 
-- **Language**: TypeScript (Strict Mode)
-- **Graphics API**: WebGL 2.0 & WebGPU (Experimental)
-- **Bundler**: Webpack 5
-- **Tooling**: Webpack Dev Server, TS-Loader
-- **Deployment**: Vercel
+- **TypeScript** (strict mode)
+- **WebGL 2.0** — direct API calls, no abstractions
+- **Webpack 5** for bundling
+- **Vercel** for hosting the demo
 
 ---
 
-## 🚀 Quick Start
+## Getting started
 
-### Prerequisites
-- [Node.js](https://nodejs.org/) (v16+)
-- npm
+You'll need Node.js (v16 or newer) and npm.
 
-### Installation
 ```bash
-# Clone the repository
 git clone https://github.com/Varatharajan1808/3D-Web_Engine.git
-
-# Navigate to project
 cd 3D-Web_Engine
-
-# Install dependencies
 npm install
-```
-
-### Running Locally
-```bash
-# Start the development server (with Hot Reload)
 npm run start
 ```
-Access the editor at `http://localhost:8081`
 
-### Building for Production
+Then open `http://localhost:8081` in your browser.
+
+To build for production:
+
 ```bash
-# Generate optimized bundles
 npm run build
 ```
 
 ---
 
-## 💡 Usage Example: Programmatic Scene Setup
+## Quick example
+
+If you want to use the engine programmatically instead of the editor:
 
 ```typescript
 import { WebGLRenderEngine } from './engine/RenderingPipeline/Webgl/WebGLRenderEngine';
@@ -105,21 +95,17 @@ import { SceneHierarchyManager } from './engine/SceneGraph/SceneHierarchyManager
 import { CameraController } from './engine/CameraSystem/CameraController';
 import { RenderableMeshObject } from './engine/MeshRenderer/RenderableMeshObject';
 
-// 1. Initialize Engine
 const canvas = document.getElementById('Mycanvas') as HTMLCanvasElement;
 const webgl = new WebGLRenderEngine(canvas);
 const scene = new SceneHierarchyManager();
 
-// 2. Setup Camera
 const camera = new CameraController();
-camera.PerspectiveCamera(45, canvas.width/canvas.height, 0.1, 1000);
+camera.PerspectiveCamera(45, canvas.width / canvas.height, 0.1, 1000);
 camera.OrbitCamera();
 
-// 3. Add Geometry
 const box = new RenderableMeshObject(new BoxGeometryBuilder().CubeData());
 scene.add(box);
 
-// 4. Render Loop
 const animate = () => {
   webgl.render(scene, camera);
   requestAnimationFrame(animate);
@@ -129,24 +115,23 @@ animate();
 
 ---
 
-## 🚀 Future Roadmap
+## What I want to add next
 
-I am actively developing this engine to bridge the gap between pure WebGL and high-level 3D frameworks.
-
-- [ ] **Advanced Lighting**: Real-time Shadow Mapping (Cascaded Shadow Maps) and Screen Space Ambient Occlusion (SSAO).
-- [ ] **Animation System**: Skinned mesh animation support for rigged character models.
-- [ ] **Post-Processing Pipeline**: Integrated passes for Bloom, HDR Tone Mapping, and Depth of Field.
-- [ ] **WebGPU Support**: Implementing a parallel rendering backend for the next-generation web graphics API.
-- [ ] **Physics Integration**: Integration with a physics engine (like Rapier or Cannon.js) for rigid body dynamics.
-- [ ] **Advanced Materials**: Support for Clearcoat, Sheen, and Iridescence based on the latest GLTF extensions.
+- Shadow mapping (cascaded shadow maps)
+- Skeletal animation for rigged models
+- Post-processing (bloom, HDR, depth of field)
+- A proper WebGPU backend
+- Physics (probably Rapier or Cannon.js)
+- More material types — clearcoat, sheen, iridescence
 
 ---
 
-## 🤝 Contact & Support
+## Get in touch
 
-This project is open for collaboration! If you're a developer or recruiter interested in the technical implementation:
-- **GitHub**: [Varatharajan1808](https://github.com/Varatharajan1808)
-- Open an Issue for bugs or feature requests.
+If you have questions or want to chat about the project:
+- **GitHub:** [Varatharajan1808](https://github.com/Varatharajan1808)
+- Feel free to open an issue for bugs or feature ideas.
 
 ---
-Built with ❤️ by **Varatharajan** using TypeScript, WebGL.
+
+Built by **Varatharajan** — TypeScript + WebGL, no shortcuts.
