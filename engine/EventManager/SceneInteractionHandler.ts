@@ -82,6 +82,10 @@ export class SceneInteractionHandler {
   webgl: WebGLRenderEngine;
   initialMouseAngle: number = 0;
   onSelect?: (uuid: string | null) => void;
+  onDelete?: (uuid: string) => void;
+  onAddObject?: (type: string, subtype: string) => void;
+  onOpenAddMenu?: () => void;
+  onOpenFileMenu?: () => void;
 
   constructor(
     scene: SceneHierarchyManager,
@@ -166,7 +170,84 @@ export class SceneInteractionHandler {
     };
   }
   keyboardEvents(): void {
-    // Keyboard event handlers for shortcuts can be added here
+    window.addEventListener("keydown", (event: KeyboardEvent) => {
+      // Ignore shortcuts if user is typing in an input field
+      if (
+        document.activeElement instanceof HTMLInputElement ||
+        document.activeElement instanceof HTMLTextAreaElement
+      ) {
+        return;
+      }
+
+      const key = event.key.toLowerCase();
+
+      // Object Creation Shortcuts (Shift + A/F)
+      if (event.shiftKey) {
+        if (key === "a") {
+          // Open Add Menu
+          this.onOpenAddMenu?.();
+          return;
+        }
+        if (key === "f") {
+          // Open File Menu
+          this.onOpenFileMenu?.();
+          return;
+        }
+      }
+
+      switch (key) {
+        case "t":
+          if (this.gizmo && this.isObjectSelected) {
+            this.gizmo.setMode("translate");
+          }
+          break;
+        case "r":
+          if (this.gizmo && this.isObjectSelected) {
+            this.gizmo.setMode("rotate");
+          }
+          break;
+        case "s":
+          if (this.gizmo && this.isObjectSelected) {
+            this.gizmo.setMode("scale");
+          }
+          break;
+        case "delete":
+        case "backspace":
+          if (this.selectedObject) {
+            // Prevent deleting grid or other system objects if necessary
+            if (this.selectedObject.type === "Grid-Geometry") return;
+
+            const uuid = this.selectedObject.uuid;
+            this.scene.remove(this.selectedObject);
+
+            if (this.onDelete && uuid) {
+              this.onDelete(uuid);
+            }
+
+            this.deselectObject();
+          }
+          break;
+        case "escape":
+          this.deselectObject();
+          break;
+        case "f":
+          if (this.selectedObject && this.camera) {
+            // Focus on object
+            // Update camera center to object position
+            this.camera.center = {
+              x: this.selectedObject.position.x,
+              y: this.selectedObject.position.y,
+              z: this.selectedObject.position.z
+            };
+
+            // Re-orient camera to look at new center while maintaining distance/angle
+            // Note: CameraController might need an update to respect 'center' property changes
+            // For now, we manually trigger orbit update which uses 'center'
+            this.camera.OrbitCamera();
+          }
+          break;
+      }
+    });
   }
   rayEvents(): void {
     this.canvas.addEventListener("mousedown", (event: MouseEvent) => {
@@ -268,6 +349,9 @@ export class SceneInteractionHandler {
 
           if (this.gizmo) {
             this.gizmo.visible = true;
+            if (!this.gizmo.currentGizmoType) {
+              this.gizmo.setMode("translate");
+            }
             this.updateGizmoPosition(clickedObject);
             if (!this.gizmo.gizmoMeshes.length) {
               this.gizmo.addToScene(this.scene);

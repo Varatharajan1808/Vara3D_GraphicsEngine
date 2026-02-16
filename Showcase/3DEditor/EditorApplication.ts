@@ -147,6 +147,17 @@ events.onSelect = (uuid) => {
   }
 };
 
+// Handle object deletion
+events.onDelete = (uuid) => {
+  // Remove from createdObjects map if present
+  if (createdObjects.has(uuid)) {
+    createdObjects.delete(uuid);
+  }
+
+  // Update scene graph UI
+  updateSceneGraph();
+};
+
 // Track previous selection to detect changes
 let previousSelectedUUID: string | null = null;
 
@@ -665,7 +676,8 @@ uiManager.onToolChange((tool: string) => {
 });
 
 // Handle adding objects
-uiManager.onAddObject((type: string, subtype: string) => {
+// Reusable function to handle adding objects
+function handleAddObject(type: string, subtype: string) {
   if (type === "mesh") {
     let geometryData: any = null;
 
@@ -733,6 +745,12 @@ uiManager.onAddObject((type: string, subtype: string) => {
     events.selectedObject = mesh;
     events.isObjectSelected = true;
     events.select = [mesh];
+    // Start with translate tool active if none
+    if (events.gizmo && !events.gizmo.currentGizmoType) {
+      events.gizmo.setMode("translate");
+    }
+    if (events.gizmo) events.gizmo.visible = true;
+
     if (events.webgl) {
       events.webgl.selectedObject = mesh;
     }
@@ -822,7 +840,30 @@ uiManager.onAddObject((type: string, subtype: string) => {
     }
     updateSceneGraph();
   }
-});
+}
+
+// Handle adding objects via UI
+uiManager.onAddObject(handleAddObject);
+
+// Handle adding objects via Keyboard Shortcuts (from SceneInteractionHandler)
+// Handle adding objects via Keyboard Shortcuts (from SceneInteractionHandler)
+events.onAddObject = handleAddObject;
+
+// Handle Context Menu (Shift + A)
+events.onOpenAddMenu = () => {
+  const addMenuBtn = document.getElementById("add-menu-btn");
+  if (addMenuBtn) {
+    addMenuBtn.click();
+  }
+};
+
+// Handle File Menu (Shift + F)
+events.onOpenFileMenu = () => {
+  const fileMenuBtn = document.getElementById("file-menu-btn");
+  if (fileMenuBtn) {
+    fileMenuBtn.click();
+  }
+};
 
 // Handle New Scene
 document.getElementById("new-scene-btn")?.addEventListener("click", () => {

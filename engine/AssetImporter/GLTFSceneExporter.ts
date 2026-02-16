@@ -5,6 +5,7 @@ import { Tangents } from "../GeometryPrimitives/TangentSpaceCalculator";
 import { RenderableMeshObject } from "../MeshRenderer/RenderableMeshObject";
 import { PBRMaterialProperties } from "../MaterialSystem/PBRMaterialProperties";
 import { SceneNode } from "../SceneGraph/SceneNode";
+import { LightNode } from "../LightingEngine/LightNode";
 
 // ======================
 // Type Definitions
@@ -722,7 +723,10 @@ export class GLTFSceneExporter {
     // Recursively collect all nodes from the scene tree
     const collectNode = (node: any) => {
       // Skip gizmo parts and grid geometry
-      if (node.isGizmoPart || node.type === "Grid-Geometry") return;
+      const isGizmo = node.isGizmoPart ||
+        (node.type && node.type.startsWith('Gizmo-')) ||
+        (node.name && node.name.startsWith('Gizmo'));
+      if (isGizmo || node.type === "Grid-Geometry" || node instanceof LightNode) return;
 
       if (node instanceof RenderableMeshObject && node.geometry) {
         const materialData = node.material ?? {};
