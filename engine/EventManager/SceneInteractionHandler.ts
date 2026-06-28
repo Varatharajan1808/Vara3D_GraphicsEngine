@@ -3,7 +3,7 @@ import { CameraController } from "../CameraSystem/CameraController";
 import { TransformGizmoController } from "../CoreUtilities/TransformGizmoController";
 import { RenderableMeshObject } from "../MeshRenderer/RenderableMeshObject";
 import { GLTFSceneExporter } from "../AssetImporter/GLTFSceneExporter";
-import { WebGLRenderEngine } from "../RenderingPipeline/Webgl/WebGLRenderEngine";
+import { WebGLRenderEngine } from "../Renderer/Webgl/WebGLRenderEngine";
 import { SceneHierarchyManager } from "../SceneGraph/SceneHierarchyManager";
 
 

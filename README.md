@@ -1,36 +1,71 @@
-# 3D Web Engine & Editor
+# Vara3D Graphics Engine
 
 [![TypeScript](https://img.shields.io/badge/TypeScript-007ACC?style=for-the-badge&logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
 [![WebGL](https://img.shields.io/badge/WebGL-990000?style=for-the-badge&logo=webgl&logoColor=white)](https://developer.mozilla.org/en-US/docs/Web/API/WebGL_API)
 [![License: ISC](https://img.shields.io/badge/License-ISC-blue.svg?style=for-the-badge)](https://opensource.org/licenses/ISC)
 
-I'm building a 3D engine and editor from scratch using TypeScript and raw WebGL — no Three.js, no Babylon, no wrapper libraries. The whole point is to learn how rendering actually works under the hood by writing everything myself: the math, the shaders, the scene graph, the material system, all of it.
+ [Badges] 
+![3D Editor Interface](./images/image.png)
 
-**Live demo:** [varatha3deditor.vercel.app](https://varatha3deditor.vercel.app/)
+### Highlights
+
+- Scene Graph
+- Physically Based Rendering (PBR)
+- GLTF / GLB Import & Export
+- Transform Gizmos
+- WebGL Rendering Pipeline
+- TypeScript
+- WebGPU (In Progress)
+
+## Introduction 
+
+A browser-based 3D Graphics Engine and visual editor built from scratch using TypeScript and raw WebGL, without relying on high-level rendering frameworks.
+
+The project focuses on graphics engine architecture, rendering pipelines, shader programming, scene graph management, physically based rendering (PBR), asset pipelines, and interactive editing tools while providing a deeper understanding of modern real-time rendering.
+
+## Disclaimer
+
+This is a personal graphics programming project developed independently for learning and experimentation. It does not contain proprietary code, assets, or confidential information from any employer.
+
+## Live demo [varatha3deditor.vercel.app](https://varatha3deditor.vercel.app/)
 
 ---
 
-## What it does
+## Core Features
 
-- Renders 3D scenes using a custom WebGL 2.0 pipeline I wrote from scratch
-- PBR materials (metallic-roughness workflow, normal maps, emissive, etc.)
-- Point, spot, and directional lights with proper GLSL shaders
-- Frustum culling so it doesn't waste time rendering stuff off-screen
-- Full scene graph with parent-child transforms
-- A visual editor where you can add objects, move them around with gizmos, tweak materials, import/export GLTF files, and see everything update in real time
+![Core Rendering Features - WebGL Materials & Textures](./images/image1.png)
+
+- Custom WebGL rendering pipeline
+- Physically Based Rendering (PBR)
+- GLSL shader system
+- Scene Graph architecture
+- Parent-child transform hierarchy
+- Frustum culling
+- GLTF / GLB import & export
+- Material and lighting system
+- Interactive visual editor
+- Transform Gizmos (Translate / Rotate / Scale)
+- Interactive SVG View Helper (Camera Orientation & Axis Indicator)
+- Real-time rendering statistics (FPS & Draw Calls)
 
 ---
 
-## The editor
+## Editor Features  
 
-The editor is the main way to interact with the engine right now. It has:
+The integrated editor provides tools for interacting with the rendering engine in real time.
 
-- A scene tree panel that shows your hierarchy
-- A property inspector for transforms, materials, and light settings
-- Translate / Rotate / Scale gizmos
-- GLTF/GLB import and export
-- Texture and normal map management
-- FPS counter and draw call stats
+![Interactive Visual Editor - 3D Models & Scene Tree Controls](./images/image2.png)
+
+- Scene hierarchy panel
+- Property inspector
+- Material editor
+- Light management
+- Transform gizmos
+- Interactive SVG View Helper (viewport orientation & axis alignment)
+- GLTF / GLB import & export
+- Texture & normal map management
+- FPS counter
+- Draw call statistics
 
 ---
 
@@ -38,7 +73,7 @@ The editor is the main way to interact with the engine right now. It has:
 
 ```
 ├── engine/
-│   ├── RenderingPipeline/    # WebGL context, shader compilation, GLSL shaders
+│   ├── Renderer/    # WebGL context, shader compilation, GLSL shaders
 │   ├── MaterialSystem/       # PBR material definitions
 │   ├── LightingEngine/       # Light types and management
 │   ├── CameraSystem/         # Perspective & orthographic cameras, orbit controls
@@ -58,7 +93,9 @@ The editor is the main way to interact with the engine right now. It has:
 ## Tech used
 
 - **TypeScript** (strict mode)
-- **WebGL 2.0** — direct API calls, no abstractions
+- **WebGL** — direct API calls, no abstractions
+- **GLSL** for shaders
+- **WebGPU** (In Progress)
 - **Webpack 5** for bundling
 - **Vercel** for hosting the demo
 
@@ -66,18 +103,29 @@ The editor is the main way to interact with the engine right now. It has:
 
 ## Getting started
 
-You'll need Node.js (v16 or newer) and npm.
+## Requirements
 
+- Node.js v16+
+- npm
+
+## Installation
 ```bash
-git clone https://github.com/Varatharajan1808/3D-Web_Engine.git
-cd 3D-Web_Engine
+git clone https://github.com/Varatharajan1808/Vara3D-Graphics-Engine.git
+
+cd Vara3D-Graphics-Engine
+
 npm install
-npm run start
+
+npm run dev
 ```
 
-Then open `http://localhost:8081` in your browser.
+Open
 
-To build for production:
+```text
+http://localhost:8081
+```
+
+Build production version
 
 ```bash
 npm run build
@@ -90,7 +138,7 @@ npm run build
 If you want to use the engine programmatically instead of the editor:
 
 ```typescript
-import { WebGLRenderEngine } from './engine/RenderingPipeline/Webgl/WebGLRenderEngine';
+import { WebGLRenderEngine } from './engine/Renderer/Webgl/WebGLRenderEngine';
 import { SceneHierarchyManager } from './engine/SceneGraph/SceneHierarchyManager';
 import { CameraController } from './engine/CameraSystem/CameraController';
 import { RenderableMeshObject } from './engine/MeshRenderer/RenderableMeshObject';
@@ -115,23 +163,27 @@ animate();
 
 ---
 
-## What I want to add next
+## RoadMap
 
-- Shadow mapping (cascaded shadow maps)
-- Skeletal animation for rigged models
-- Post-processing (bloom, HDR, depth of field)
-- A proper WebGPU backend
-- Physics (probably Rapier or Cannon.js)
-- More material types — clearcoat, sheen, iridescence
-
----
-
-## Get in touch
-
-If you have questions or want to chat about the project:
-- **GitHub:** [Varatharajan1808](https://github.com/Varatharajan1808)
-- Feel free to open an issue for bugs or feature ideas.
+- WebGPU backend
+- Shadow Mapping
+- Skeletal Animation
+- Post Processing
+- Physics Integration
+- Advanced Material Models
+- Compute Shader Support
 
 ---
 
-Built by **Varatharajan** — TypeScript + WebGL, no shortcuts.
+## Contact
+
+If you have questions, suggestions, or feedback, feel free to open an issue or start a discussion on GitHub.
+
+GitHub:
+https://github.com/Varatharajan1808
+
+---
+
+Built with ❤️ by **Varatharajan**
+
+**TypeScript • WebGL • Graphics Programming • Rendering Engine Development**

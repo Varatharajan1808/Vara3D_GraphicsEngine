@@ -1,6 +1,6 @@
 import { EditorUIController } from "../../engine/UserInterface/EditorUIController";
 import { ViewHelper } from "../../engine/UserInterface/ViewHelper";
-import { WebGLRenderEngine } from "../../engine/RenderingPipeline/Webgl/WebGLRenderEngine";
+import { WebGLRenderEngine } from "../../engine/Renderer/Webgl/WebGLRenderEngine";
 import { CameraController } from "../../engine/CameraSystem/CameraController";
 import { SceneHierarchyManager } from "../../engine/SceneGraph/SceneHierarchyManager";
 import { PBRMaterialProperties } from "../../engine/MaterialSystem/PBRMaterialProperties";
@@ -16,7 +16,7 @@ import { SceneLightingManager } from "../../engine/LightingEngine/SceneLightingM
 import { GLTFAssetLoader } from "../../engine/AssetImporter/GLTFAssetLoader";
 import { SceneInteractionHandler } from "../../engine/EventManager/SceneInteractionHandler";
 import { GLTFSceneExporter } from "../../engine/AssetImporter/GLTFSceneExporter";
-import { createProgram } from "../../engine/RenderingPipeline/Webgl/ShaderProgramLinker";
+import { createProgram } from "../../engine/Renderer/Webgl/ShaderProgramLinker";
 import { PointLightNode } from "../../engine/LightingEngine/PointLightNode";
 import { SpotLightNode } from "../../engine/LightingEngine/SpotLightNode";
 import { DirectionalLightNode } from "../../engine/LightingEngine/DirectionalLightNode";
@@ -28,7 +28,7 @@ import {
   DirLightvsShader, DirLightfsShader,
   UnifiedLightvsShader,
   UnifiedLightfsShader,
-} from "../../engine/RenderingPipeline/Shaders/GLSLShaderLibrary";
+} from "../../engine/Renderer/Shaders/GLSLShaderLibrary";
 
 
 // Initialize canvas and WebGL
@@ -200,18 +200,30 @@ let frameCount = 0;
 function updateSceneGraph() {
   const sceneObjects: any[] = [];
 
+  const getNodeWeight = (type: string): number => {
+    if (!type) return 1;
+    if (type === "Camera") return 3;
+    if (type.includes("Light") || type === "Light") return 2;
+    return 1;
+  };
+
   const convertNode = (node: SceneNode): any => {
+    const convertedChildren = node.children
+      .filter(child => {
+        const isGizmo = (child as any).isGizmoPart || child.type?.startsWith("Gizmo-");
+        return !isGizmo;
+      })
+      .map(child => convertNode(child));
+
+    // Sort children: Mesh (1), Light (2), Camera (3)
+    convertedChildren.sort((a, b) => getNodeWeight(a.type) - getNodeWeight(b.type));
+
     return {
       uuid: node.uuid,
       name: node.name || node.type || "Object",
       type: node.type,
       isGizmoPart: (node as any).isGizmoPart || false,
-      children: node.children
-        .filter(child => {
-          const isGizmo = (child as any).isGizmoPart || child.type?.startsWith("Gizmo-");
-          return !isGizmo;
-        })
-        .map(child => convertNode(child))
+      children: convertedChildren
     };
   };
 
@@ -231,6 +243,9 @@ function updateSceneGraph() {
     name: cameraLabel,
     type: "Camera",
   });
+
+  // Sort root nodes: Mesh (1), Light (2), Camera (3)
+  sceneObjects.sort((a, b) => getNodeWeight(a.type) - getNodeWeight(b.type));
 
   uiManager.updateSceneGraph(sceneObjects);
 }
@@ -1367,7 +1382,7 @@ document.getElementById("webgl-toggle")?.addEventListener("click", (e) => {
   toggle.classList.toggle("active");
 
   if (toggle.classList.contains("active")) {
-    alert("WebGPU implementation is coming soon! Currently, the engine uses WebGL 2.0 for high-performance rendering.");
+    alert("WebGPU implementation is coming soon! Currently, the engine uses WebGL 1.0 for high-performance rendering.");
     // Revert back to WebGL as WebGPU is not yet available
     toggle.classList.remove("active");
   } else {
