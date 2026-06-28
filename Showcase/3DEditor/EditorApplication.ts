@@ -1,4 +1,5 @@
 import { EditorUIController } from "../../engine/UserInterface/EditorUIController";
+import { ViewHelper } from "../../engine/UserInterface/ViewHelper";
 import { WebGLRenderEngine } from "../../engine/RenderingPipeline/Webgl/WebGLRenderEngine";
 import { CameraController } from "../../engine/CameraSystem/CameraController";
 import { SceneHierarchyManager } from "../../engine/SceneGraph/SceneHierarchyManager";
@@ -139,6 +140,10 @@ const loader = new GLTFAssetLoader(gl, scene);
 
 // Initialize events
 const events = new SceneInteractionHandler(scene, camera, canvas, gl);
+
+// Initialize View Helper
+const viewportContainer = document.getElementById("viewport-container") as HTMLElement;
+const viewHelper = new ViewHelper(viewportContainer, camera, events);
 
 // Synchronize viewport selection with UI
 events.onSelect = (uuid) => {
@@ -1370,6 +1375,8 @@ document.getElementById("webgl-toggle")?.addEventListener("click", (e) => {
   }
 });
 function animate() {
+  // Update view helper animations and rendering
+  viewHelper.update();
 
   const controls = events.controlEvent();
   events.updateUI(
