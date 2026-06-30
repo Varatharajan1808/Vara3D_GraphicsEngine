@@ -57,10 +57,12 @@ export class SceneInteractionHandler {
   isScaleMode: boolean;
   isGizmoInteraction: boolean;
   isTransformationActive: boolean;
-  cameraRadiuscam: number;
-  scalervalue: number;
-  rotationX: number;
-  rotationY: number;
+  activeButton: number = -1;
+  hasDragged: boolean = false;
+  cameraRadiuscam: number = 0;
+  scalervalue: number = 0;
+  rotationX: number = 0;
+  rotationY: number = 0;
   prevMouseX: number;
   prevMouseY: number;
   sensitivity: number;
@@ -81,6 +83,11 @@ export class SceneInteractionHandler {
   gizmo: TransformGizmoController | null;
   webgl: WebGLRenderEngine;
   initialMouseAngle: number = 0;
+  editorMode: string = 'object';
+  editSubMode: string = 'vertex';
+  selectedVertices: number[] = [];
+  originalVertexPositions: number[] = [];
+  isDirectDragging: boolean = false;
   onSelect?: (uuid: string | null) => void;
   onDelete?: (uuid: string) => void;
   onAddObject?: (type: string, subtype: string) => void;
@@ -106,15 +113,9 @@ export class SceneInteractionHandler {
     this.objectSensitivity = 0.01;
 
     // Initialize orbit parameters from camera eye
-    this.cameraRadiuscam = Math.sqrt(
-      camera.eye.x * camera.eye.x +
-      camera.eye.y * camera.eye.y +
-      camera.eye.z * camera.eye.z
-    );
-    this.scalervalue = this.cameraRadiuscam;
-    this.rotationX = (Math.atan2(camera.eye.x, camera.eye.z) * (180 / Math.PI)) / this.sensitivity;
-    const horizDist = Math.sqrt(camera.eye.x * camera.eye.x + camera.eye.z * camera.eye.z);
-    this.rotationY = (Math.atan2(camera.eye.y, horizDist) * (180 / Math.PI)) / this.sensitivity;
+    this.activeButton = -1;
+    this.hasDragged = false;
+    this.updateOrbitParametersFromEye(camera);
 
     this.mouseX = 0;
     this.mouseY = 0;
@@ -251,6 +252,10 @@ export class SceneInteractionHandler {
   }
   rayEvents(): void {
     this.canvas.addEventListener("mousedown", (event: MouseEvent) => {
+      if (event.button === 2) {
+        // Ignore right clicks for selection/raycasting
+        return;
+      }
       event.preventDefault();
       const mousePos = this.getNormalizedMousePos(this.canvas, event);
       this.mouseX = mousePos.x;
@@ -270,6 +275,9 @@ export class SceneInteractionHandler {
           this.isScaleMode =
             clickedObject.geometry?.type?.includes("Scale") || false;
           this.dragStartPosition = { x: event.clientX, y: event.clientY };
+          if (this.editorMode === 'edit' && this.selectedObject && this.selectedVertices.length > 0) {
+            this.originalVertexPositions = [...(this.selectedObject.vertices as number[])];
+          }
 
           if (this.selectedObject) {
             // Highlight all parts that share the same axis for the active state
@@ -321,13 +329,118 @@ export class SceneInteractionHandler {
           }
           return;
         } else {
-          // Object selection logic
+          // If in Edit Mode and clicking the currently selected object, select sub-elements
+          if (this.editorMode === 'edit' && clickedObject === this.selectedObject) {
+            if (this.editSubMode === 'vertex') {
+              let clickedVertexIndex = clickedObject.hoveredVertexIndex;
+              if (clickedVertexIndex === undefined || clickedVertexIndex === null) {
+                const res = this.checkVertexIntersections(clickedObject);
+                clickedVertexIndex = res !== null ? res : undefined;
+              }
+              if (clickedVertexIndex !== null && clickedVertexIndex !== undefined) {
+                clickedObject.selectedVertexIndex = clickedVertexIndex !== null ? clickedVertexIndex : undefined;
+                clickedObject.selectedEdgeVertices = undefined;
+                clickedObject.highlightedFace = undefined;
+
+                this.selectedVertices = this.getMatchingVertices(clickedObject, [clickedVertexIndex]);
+                this.originalVertexPositions = [...(clickedObject.vertices as number[])];
+                this.isDirectDragging = true;
+
+                if (this.gizmo) {
+                  this.gizmo.visible = false;
+                }
+              } else {
+                // Clear selection
+                clickedObject.selectedVertexIndex = undefined;
+                this.selectedVertices = [];
+                this.isDirectDragging = false;
+                if (this.gizmo) this.gizmo.visible = false;
+              }
+            } else if (this.editSubMode === 'edge') {
+              let clickedEdge = clickedObject.hoveredEdgeVertices;
+              if (clickedEdge === undefined || clickedEdge === null) {
+                const res = this.checkEdgeIntersections(clickedObject);
+                clickedEdge = res !== null ? res : undefined;
+              }
+              if (clickedEdge !== null && clickedEdge !== undefined) {
+                clickedObject.selectedEdgeVertices = clickedEdge !== null ? clickedEdge : undefined;
+                clickedObject.selectedVertexIndex = undefined;
+                clickedObject.highlightedFace = undefined;
+
+                this.selectedVertices = this.getMatchingVertices(clickedObject, clickedEdge);
+                this.originalVertexPositions = [...(clickedObject.vertices as number[])];
+                this.isDirectDragging = true;
+
+                if (this.gizmo) {
+                  this.gizmo.visible = false;
+                }
+              } else {
+                clickedObject.selectedEdgeVertices = undefined;
+                this.selectedVertices = [];
+                this.isDirectDragging = false;
+                if (this.gizmo) this.gizmo.visible = false;
+              }
+            } else if (this.editSubMode === 'face') {
+              let clickedFaceIndices = clickedObject.hoveredFace;
+              if (clickedFaceIndices === undefined || clickedFaceIndices === null) {
+                const clickedFaceResult = this.checkFaceIntersections(clickedObject);
+                if (clickedFaceResult !== null) {
+                  clickedFaceIndices = clickedFaceResult.vertexIndices;
+                }
+              }
+              if (clickedFaceIndices !== null && clickedFaceIndices !== undefined) {
+                clickedObject.highlightedFace = clickedFaceIndices;
+                clickedObject.selectedVertexIndex = undefined;
+                clickedObject.selectedEdgeVertices = undefined;
+
+                this.selectedVertices = this.getMatchingVertices(clickedObject, clickedFaceIndices);
+
+                // Position gizmo at centroid
+                const vertices = clickedObject.vertices;
+                const centroid = [0, 0, 0];
+                for (const idx of clickedFaceIndices) {
+                  centroid[0] += vertices[idx * 3];
+                  centroid[1] += vertices[idx * 3 + 1];
+                  centroid[2] += vertices[idx * 3 + 2];
+                }
+                const count = clickedFaceIndices.length;
+                const localCentroid = [centroid[0] / count, centroid[1] / count, centroid[2] / count];
+                const worldCentroid = vec3.create();
+                vec3.transformMat4(worldCentroid, localCentroid, clickedObject.getWorldMatrix());
+
+                if (this.gizmo) {
+                  this.gizmo.position.x = worldCentroid[0];
+                  this.gizmo.position.y = worldCentroid[1];
+                  this.gizmo.position.z = worldCentroid[2];
+                  this.gizmo.visible = true;
+                  if (!this.gizmo.gizmoMeshes.length) {
+                    this.gizmo.addToScene(this.scene);
+                  }
+                  this.gizmo.updateLocalMatrix();
+                }
+              } else {
+                clickedObject.highlightedFace = undefined;
+                this.selectedVertices = [];
+                if (this.gizmo) this.gizmo.visible = false;
+              }
+            }
+            this.dragStartPosition = { x: event.clientX, y: event.clientY };
+            return;
+          }
+
+          // Default object selection logic
           this.isObjectSelected = true;
           this.selectedObject = clickedObject;
           this.select = [clickedObject];
 
           // Update the WebGL instance's selectedObject
           this.webgl.selectedObject = clickedObject;
+
+          // Clear edit selections on selection change
+          clickedObject.selectedVertexIndex = undefined;
+          clickedObject.selectedEdgeVertices = undefined;
+          clickedObject.highlightedFace = undefined;
+          this.selectedVertices = [];
 
           this.dragStartPosition = { x: event.clientX, y: event.clientY };
           this.objectPivotPosition = {
@@ -390,7 +503,9 @@ export class SceneInteractionHandler {
 
     this.canvas.addEventListener("contextmenu", (event) => {
       event.preventDefault();
-      this.deselectObject();
+      if (!this.hasDragged) {
+        this.deselectObject();
+      }
     });
   }
 
@@ -400,7 +515,12 @@ export class SceneInteractionHandler {
       obj.hoveredFace = undefined; // Clear hover highlights
       obj.highlightColor = undefined;
       obj.hoverColor = undefined; // Clear hover colors
+      obj.selectedVertexIndex = undefined;
+      obj.selectedEdgeVertices = undefined;
     });
+    this.selectedVertices = [];
+    this.originalVertexPositions = [];
+    this.isDirectDragging = false;
     this.isObjectSelected = false;
     this.selectedObject = null;
     this.select = [];
@@ -450,9 +570,63 @@ export class SceneInteractionHandler {
       this.prevMouseX = e.clientX;
       this.prevMouseY = e.clientY;
       this.dragStartPosition = { x: e.clientX, y: e.clientY };
+      this.activeButton = e.button;
+      this.hasDragged = false;
     });
     this.canvas.addEventListener("pointermove", (e: PointerEvent) => {
       if (!this.move || this.isPressed) return;
+
+      // Set hasDragged flag
+      const dragThreshold = 2;
+      const dxDrag = Math.abs(e.clientX - this.dragStartPosition.x);
+      const dyDrag = Math.abs(e.clientY - this.dragStartPosition.y);
+      if (dxDrag > dragThreshold || dyDrag > dragThreshold) {
+        this.hasDragged = true;
+      }
+
+      // If right click, perform camera panning and ignore other interactions
+      if (this.activeButton === 2) {
+        e.preventDefault();
+        
+        // Get camera local right and up axes
+        const viewMatrix = this.camera.viewMatrix;
+        const right = vec3.fromValues(viewMatrix[0], viewMatrix[4], viewMatrix[8]);
+        const up = vec3.fromValues(viewMatrix[1], viewMatrix[5], viewMatrix[9]);
+        
+        // Calculate movement delta using e.movementX/Y
+        const deltaX = e.movementX;
+        const deltaY = e.movementY;
+        
+        // Sensitivity based on camera radius
+        const panSensitivity = Math.max(0.1, this.cameraRadiuscam) * 0.001;
+        
+        // Move eye and center in direction of pan
+        const moveVecX = vec3.create();
+        const moveVecY = vec3.create();
+        
+        vec3.scale(moveVecX, right, -deltaX * panSensitivity);
+        vec3.scale(moveVecY, up, deltaY * panSensitivity);
+        
+        this.camera.eye.x += moveVecX[0] + moveVecY[0];
+        this.camera.eye.y += moveVecX[1] + moveVecY[1];
+        this.camera.eye.z += moveVecX[2] + moveVecY[2];
+        
+        this.camera.center.x += moveVecX[0] + moveVecY[0];
+        this.camera.center.y += moveVecX[1] + moveVecY[1];
+        this.camera.center.z += moveVecX[2] + moveVecY[2];
+        
+        this.camera.OrbitCamera();
+        return;
+      }
+
+      // Direct vertex/edge dragging
+      if (this.isDirectDragging && this.selectedObject && this.selectedVertices.length > 0) {
+        e.preventDefault();
+        const deltaX = e.clientX - this.dragStartPosition.x;
+        const deltaY = e.clientY - this.dragStartPosition.y;
+        this.handleDirectSubElementTranslation(deltaX, deltaY);
+        return;
+      }
 
       // Priority 1: Handle gizmo interaction
       if (
@@ -478,6 +652,7 @@ export class SceneInteractionHandler {
       // Priority 2: Rotate camera only if NOT interacting with objects
       // Lock rotation in orthographic mode to maintain fixed view
       if (
+        this.activeButton === 0 &&
         !this.isPressed &&
         !this.isObjectSelected &&
         !this.isGizmoInteraction &&
@@ -495,6 +670,8 @@ export class SceneInteractionHandler {
       this.move = false;
       this.isGizmoInteraction = false;
       this.isTransformationActive = false;
+      this.isDirectDragging = false;
+      this.activeButton = -1;
 
       // Clear all active states for gizmo parts
       this.scene.objects.forEach((obj: any) => {
@@ -645,7 +822,32 @@ export class SceneInteractionHandler {
       obj.hoveredFace = undefined;
       obj.hoverColor = undefined;
       obj.isHovered = false;
+      obj.hoveredVertexIndex = undefined;
+      obj.hoveredEdgeVertices = undefined;
     });
+
+    if (this.editorMode === 'edit' && this.selectedObject) {
+      this.setupRay(this.mouseX, this.mouseY);
+      const clickedObject = this.selectedObject;
+      
+      if (this.editSubMode === 'vertex') {
+        const hoveredVertexIndex = this.checkVertexIntersections(clickedObject);
+        if (hoveredVertexIndex !== null) {
+          clickedObject.hoveredVertexIndex = hoveredVertexIndex;
+        }
+      } else if (this.editSubMode === 'edge') {
+        const hoveredEdge = this.checkEdgeIntersections(clickedObject);
+        if (hoveredEdge !== null) {
+          clickedObject.hoveredEdgeVertices = hoveredEdge;
+        }
+      } else if (this.editSubMode === 'face') {
+        const faceHit = this.checkFaceIntersections(clickedObject);
+        if (faceHit) {
+          clickedObject.hoveredFace = faceHit.vertexIndices;
+        }
+      }
+      return;
+    }
 
     if (this.gizmo && this.gizmo.visible) {
       // Use the NDC coordinates already calculated in the mousemove listener
@@ -1224,20 +1426,17 @@ export class SceneInteractionHandler {
     });
   }
   updateOrbitParametersFromEye(camera: CameraController): void {
-    this.cameraRadiuscam = Math.sqrt(
-      camera.eye.x * camera.eye.x +
-      camera.eye.y * camera.eye.y +
-      camera.eye.z * camera.eye.z
-    );
+    const dx = camera.eye.x - camera.center.x;
+    const dy = camera.eye.y - camera.center.y;
+    const dz = camera.eye.z - camera.center.z;
+    this.cameraRadiuscam = Math.sqrt(dx * dx + dy * dy + dz * dz);
     this.scalervalue = this.cameraRadiuscam;
     this.rotationX =
-      (Math.atan2(camera.eye.x, camera.eye.z) * (180 / Math.PI)) /
+      (Math.atan2(dx, dz) * (180 / Math.PI)) /
       this.sensitivity;
-    const horizDist = Math.sqrt(
-      camera.eye.x * camera.eye.x + camera.eye.z * camera.eye.z
-    );
+    const horizDist = Math.sqrt(dx * dx + dz * dz);
     this.rotationY =
-      (Math.atan2(camera.eye.y, horizDist) * (180 / Math.PI)) /
+      (Math.atan2(dy, horizDist) * (180 / Math.PI)) /
       this.sensitivity;
   }
   calculateEdgeCount(indices: Uint16Array): number {
@@ -1318,6 +1517,56 @@ export class SceneInteractionHandler {
       moveY = (right[1] * deltaX + up[1] * -deltaY) * this.objectSensitivity;
       moveZ = (right[2] * deltaX + up[2] * -deltaY) * this.objectSensitivity;
     }
+    if (this.editorMode === 'edit' && this.selectedVertices.length > 0) {
+      // 1. Calculate world space delta vector
+      const worldDelta = vec3.fromValues(moveX, moveY, moveZ);
+      
+      // 2. Transform world space delta vector to local space of the mesh
+      const invWorldMatrix = mat4.create();
+      mat4.invert(invWorldMatrix, this.selectedObject.getWorldMatrix());
+      invWorldMatrix[12] = 0;
+      invWorldMatrix[13] = 0;
+      invWorldMatrix[14] = 0;
+      
+      const localDelta = vec3.create();
+      vec3.transformMat4(localDelta, worldDelta, invWorldMatrix);
+
+      // 3. Apply local delta to all selected vertices relative to their drag start positions
+      const vertices = this.selectedObject.vertices as number[];
+      const original = this.originalVertexPositions;
+      for (const idx of this.selectedVertices) {
+        vertices[idx * 3] = original[idx * 3] + localDelta[0];
+        vertices[idx * 3 + 1] = original[idx * 3 + 1] + localDelta[1];
+        vertices[idx * 3 + 2] = original[idx * 3 + 2] + localDelta[2];
+      }
+
+      // 4. Force renderer update and recalculate normals
+      this.selectedObject.geometryNeedsUpdate = true;
+      this.selectedObject.geometry.type = "Custom-Mesh"; // Bypass primitive normals map
+      this.recalculateNormals(this.selectedObject);
+      this.selectedObject.updateBoundingBox();
+
+      // 5. Update Gizmo position to the new world position of the selection center
+      let avgLocal = vec3.create();
+      for (const idx of this.selectedVertices) {
+        avgLocal[0] += vertices[idx * 3];
+        avgLocal[1] += vertices[idx * 3 + 1];
+        avgLocal[2] += vertices[idx * 3 + 2];
+      }
+      vec3.scale(avgLocal, avgLocal, 1 / this.selectedVertices.length);
+
+      const avgWorld = vec3.create();
+      vec3.transformMat4(avgWorld, avgLocal, this.selectedObject.getWorldMatrix());
+
+      if (this.gizmo) {
+        this.gizmo.position.x = avgWorld[0];
+        this.gizmo.position.y = avgWorld[1];
+        this.gizmo.position.z = avgWorld[2];
+        this.gizmo.updateLocalMatrix();
+      }
+      return;
+    }
+
     this.selectedObject.position.x = this.originalObjectPosition.x + moveX;
     this.selectedObject.position.y = this.originalObjectPosition.y + moveY;
     this.selectedObject.position.z = this.originalObjectPosition.z + moveZ;
@@ -1453,15 +1702,233 @@ export class SceneInteractionHandler {
   }
   controlEvent(): number[] {
     if (this.isObjectSelected && this.selectedObject && this.gizmo) {
-      this.updateGizmoPosition(this.selectedObject);
+      // In edit mode, don't auto-align gizmo to mesh origin if a sub-element is selected
+      if (this.editorMode !== 'edit' || this.selectedVertices.length === 0) {
+        this.updateGizmoPosition(this.selectedObject);
+      }
     }
     const cameraAngleX = ((this.rotationX * this.sensitivity) / 180) * Math.PI;
     const cameraAngleY = ((this.rotationY * this.sensitivity) / 180) * Math.PI;
     const cameraX =
-      this.cameraRadiuscam * Math.cos(cameraAngleY) * Math.sin(cameraAngleX);
-    const cameraY = this.cameraRadiuscam * Math.sin(cameraAngleY);
+      this.camera.center.x + this.cameraRadiuscam * Math.cos(cameraAngleY) * Math.sin(cameraAngleX);
+    const cameraY = this.camera.center.y + this.cameraRadiuscam * Math.sin(cameraAngleY);
     const cameraZ =
-      this.cameraRadiuscam * Math.cos(cameraAngleY) * Math.cos(cameraAngleX);
+      this.camera.center.z + this.cameraRadiuscam * Math.cos(cameraAngleY) * Math.cos(cameraAngleX);
     return [cameraX, cameraY, cameraZ];
+  }
+
+  // --- EDIT MODE HELPER METHODS ---
+
+  checkVertexIntersections(mesh: RenderableMeshObject): number | null {
+    const vertices = mesh.vertices || [];
+    const modelMatrix = mesh.getWorldMatrix();
+    let closestT = Infinity;
+    let closestVertexIndex = -1;
+    const threshold = Math.max(0.4, this.cameraRadiuscam * 0.06);
+
+    for (let i = 0; i < vertices.length; i += 3) {
+      const localPos = vec3.fromValues(vertices[i], vertices[i + 1], vertices[i + 2]);
+      const worldPos = vec3.create();
+      vec3.transformMat4(worldPos, localPos, modelMatrix);
+
+      const w = vec3.create();
+      vec3.subtract(w, worldPos, this.rayOrigin as any);
+      const proj = vec3.dot(w, this.rayDirection as any);
+      
+      if (proj >= 0) {
+        const closestPointOnRay = vec3.fromValues(
+          this.rayOrigin[0] + this.rayDirection[0] * proj,
+          this.rayOrigin[1] + this.rayDirection[1] * proj,
+          this.rayOrigin[2] + this.rayDirection[2] * proj
+        );
+        const dist = vec3.distance(worldPos, closestPointOnRay);
+        
+        if (dist < threshold && proj < closestT) {
+          closestT = proj;
+          closestVertexIndex = i / 3;
+        }
+      }
+    }
+
+    return closestVertexIndex >= 0 ? closestVertexIndex : null;
+  }
+
+  checkEdgeIntersections(mesh: RenderableMeshObject): number[] | null {
+    const indices = mesh.indices;
+    const vertices = mesh.vertices;
+    if (!indices || !vertices) return null;
+
+    const modelMatrix = mesh.getWorldMatrix();
+    let closestT = Infinity;
+    let closestEdge: number[] | null = null;
+    const threshold = Math.max(0.4, this.cameraRadiuscam * 0.06);
+
+    const getPosKey = (idx: number) => {
+      const x = vertices[idx * 3];
+      const y = vertices[idx * 3 + 1];
+      const z = vertices[idx * 3 + 2];
+      return `${x.toFixed(4)},${y.toFixed(4)},${z.toFixed(4)}`;
+    };
+
+    const edgeMap: Map<string, { v1: number; v2: number }> = new Map();
+    for (let i = 0; i < indices.length; i += 3) {
+      const v0 = indices[i];
+      const v1 = indices[i + 1];
+      const v2 = indices[i + 2];
+
+      const triEdges = [[v0, v1], [v1, v2], [v2, v0]];
+      for (const [a, b] of triEdges) {
+        const ka = getPosKey(a);
+        const kb = getPosKey(b);
+        const key = ka < kb ? `${ka}|${kb}` : `${kb}|${ka}`;
+        if (!edgeMap.has(key)) {
+          edgeMap.set(key, { v1: a, v2: b });
+        }
+      }
+    }
+
+    for (const edge of edgeMap.values()) {
+      const pA = vec3.fromValues(vertices[edge.v1 * 3], vertices[edge.v1 * 3 + 1], vertices[edge.v1 * 3 + 2]);
+      const pB = vec3.fromValues(vertices[edge.v2 * 3], vertices[edge.v2 * 3 + 1], vertices[edge.v2 * 3 + 2]);
+      
+      const worldA = vec3.create();
+      vec3.transformMat4(worldA, pA, modelMatrix);
+      const worldB = vec3.create();
+      vec3.transformMat4(worldB, pB, modelMatrix);
+
+      const worldMid = vec3.fromValues(
+        (worldA[0] + worldB[0]) / 2,
+        (worldA[1] + worldB[1]) / 2,
+        (worldA[2] + worldB[2]) / 2
+      );
+
+      const w = vec3.create();
+      vec3.subtract(w, worldMid, this.rayOrigin as any);
+      const proj = vec3.dot(w, this.rayDirection as any);
+
+      if (proj >= 0) {
+        const closestPointOnRay = vec3.fromValues(
+          this.rayOrigin[0] + this.rayDirection[0] * proj,
+          this.rayOrigin[1] + this.rayDirection[1] * proj,
+          this.rayOrigin[2] + this.rayDirection[2] * proj
+        );
+        const dist = vec3.distance(worldMid, closestPointOnRay);
+
+        if (dist < threshold && proj < closestT) {
+          closestT = proj;
+          closestEdge = [edge.v1, edge.v2];
+        }
+      }
+    }
+
+    return closestEdge;
+  }
+
+  getMatchingVertices(mesh: RenderableMeshObject, targetIndices: number[]): number[] {
+    const vertices = mesh.vertices;
+    if (!vertices) return targetIndices;
+
+    const matching = new Set<number>();
+    const targetKeys = new Set<string>();
+
+    const getPosKey = (idx: number) => {
+      return `${vertices[idx * 3].toFixed(4)},${vertices[idx * 3 + 1].toFixed(4)},${vertices[idx * 3 + 2].toFixed(4)}`;
+    };
+
+    for (const idx of targetIndices) {
+      targetKeys.add(getPosKey(idx));
+    }
+
+    for (let i = 0; i < vertices.length / 3; i++) {
+      if (targetKeys.has(getPosKey(i))) {
+        matching.add(i);
+      }
+    }
+
+    return Array.from(matching);
+  }
+
+  recalculateNormals(mesh: RenderableMeshObject): void {
+    const vertices = mesh.vertices;
+    const indices = mesh.indices;
+    if (!indices || !vertices) return;
+
+    const normals = new Float32Array(vertices.length);
+
+    for (let i = 0; i < indices.length; i += 3) {
+      const v0 = indices[i];
+      const v1 = indices[i + 1];
+      const v2 = indices[i + 2];
+
+      const p0 = [vertices[v0 * 3], vertices[v0 * 3 + 1], vertices[v0 * 3 + 2]];
+      const p1 = [vertices[v1 * 3], vertices[v1 * 3 + 1], vertices[v1 * 3 + 2]];
+      const p2 = [vertices[v2 * 3], vertices[v2 * 3 + 1], vertices[v2 * 3 + 2]];
+
+      const ux = p1[0] - p0[0], uy = p1[1] - p0[1], uz = p1[2] - p0[2];
+      const vx = p2[0] - p0[0], vy = p2[1] - p0[1], vz = p2[2] - p0[2];
+
+      const nx = uy * vz - uz * vy;
+      const ny = uz * vx - ux * vz;
+      const nz = ux * vy - uy * vx;
+
+      normals[v0 * 3] += nx;     normals[v0 * 3 + 1] += ny;     normals[v0 * 3 + 2] += nz;
+      normals[v1 * 3] += nx;     normals[v1 * 3 + 1] += ny;     normals[v1 * 3 + 2] += nz;
+      normals[v2 * 3] += nx;     normals[v2 * 3 + 1] += ny;     normals[v2 * 3 + 2] += nz;
+    }
+
+    for (let i = 0; i < normals.length; i += 3) {
+      const nx = normals[i];
+      const ny = normals[i + 1];
+      const nz = normals[i + 2];
+      const len = Math.sqrt(nx * nx + ny * ny + nz * nz);
+      if (len > 0.0001) {
+        normals[i] = nx / len;
+        normals[i + 1] = ny / len;
+        normals[i + 2] = nz / len;
+      }
+    }
+
+    mesh.normals = normals;
+  }
+
+  handleDirectSubElementTranslation(deltaX: number, deltaY: number): void {
+    if (!this.selectedObject || this.selectedVertices.length === 0) return;
+
+    const viewMatrix = this.camera.viewMatrix;
+    const right = [viewMatrix[0], viewMatrix[4], viewMatrix[8]];
+    const up = [viewMatrix[1], viewMatrix[5], viewMatrix[9]];
+
+    // Direct drag sensitivity factor
+    const sensitivity = 0.015;
+    const moveX = (right[0] * deltaX + up[0] * -deltaY) * sensitivity;
+    const moveY = (right[1] * deltaX + up[1] * -deltaY) * sensitivity;
+    const moveZ = (right[2] * deltaX + up[2] * -deltaY) * sensitivity;
+
+    const worldDelta = vec3.fromValues(moveX, moveY, moveZ);
+    
+    const invWorldMatrix = mat4.create();
+    mat4.invert(invWorldMatrix, this.selectedObject.getWorldMatrix());
+    invWorldMatrix[12] = 0;
+    invWorldMatrix[13] = 0;
+    invWorldMatrix[14] = 0;
+    
+    const localDelta = vec3.create();
+    vec3.transformMat4(localDelta, worldDelta, invWorldMatrix);
+
+    const vertices = this.selectedObject.vertices as number[];
+    const original = this.originalVertexPositions;
+    
+    for (const idx of this.selectedVertices) {
+      if (idx * 3 < vertices.length && idx * 3 < original.length) {
+        vertices[idx * 3] = original[idx * 3] + localDelta[0];
+        vertices[idx * 3 + 1] = original[idx * 3 + 1] + localDelta[1];
+        vertices[idx * 3 + 2] = original[idx * 3 + 2] + localDelta[2];
+      }
+    }
+
+    this.selectedObject.geometryNeedsUpdate = true;
+    this.selectedObject.geometry.type = "Custom-Mesh";
+    this.recalculateNormals(this.selectedObject);
+    this.selectedObject.updateBoundingBox();
   }
 }

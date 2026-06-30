@@ -295,9 +295,21 @@
 
     <!-- Left Toolbar -->
     <div id="left-toolbar">
+      <!-- Mode Toggle -->
+      <button class="toolbar-btn active" id="object-mode-btn" title="Object Mode (O)" style="font-size: 13px; font-weight: bold;">OBJ</button>
+      <button class="toolbar-btn" id="edit-mode-btn" title="Edit Mode (E)" style="font-size: 13px; font-weight: bold;">EDIT</button>
+      <div style="width: 24px; height: 1px; background: var(--border-color); margin: 4px 0;"></div>
+      
+      <!-- Transform Tools -->
       <button class="toolbar-btn active" id="translate-tool" title="Translate (T)">↔</button>
       <button class="toolbar-btn" id="rotate-tool" title="Rotate (R)">↻</button>
       <button class="toolbar-btn" id="scale-tool" title="Scale (S)">⇄</button>
+      
+      <!-- Edit Mode Sub-modes (Initially hidden) -->
+      <div id="edit-submodes-divider" style="width: 24px; height: 1px; background: var(--border-color); margin: 4px 0; display: none;"></div>
+      <button class="toolbar-btn" id="vertex-select-btn" title="Vertex Select (1)" style="font-size: 11px; display: none; font-weight: bold;">VERT</button>
+      <button class="toolbar-btn" id="edge-select-btn" title="Edge Select (2)" style="font-size: 11px; display: none; font-weight: bold;">EDGE</button>
+      <button class="toolbar-btn" id="face-select-btn" title="Face Select (3)" style="font-size: 11px; display: none; font-weight: bold;">FACE</button>
     </div>
 
     <!-- Viewport -->

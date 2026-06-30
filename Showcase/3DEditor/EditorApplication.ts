@@ -695,6 +695,108 @@ uiManager.onToolChange((tool: string) => {
   }
 });
 
+// --- EDIT MODE UI COORDINATION ---
+
+const objectModeBtn = document.getElementById("object-mode-btn")!;
+const editModeBtn = document.getElementById("edit-mode-btn")!;
+const editSubmodesDivider = document.getElementById("edit-submodes-divider")!;
+const vertexSelectBtn = document.getElementById("vertex-select-btn")!;
+const edgeSelectBtn = document.getElementById("edge-select-btn")!;
+const faceSelectBtn = document.getElementById("face-select-btn")!;
+
+function setEditorMode(mode: 'object' | 'edit') {
+  events.editorMode = mode;
+  webgl.editorMode = mode;
+  
+  // Update button active states
+  if (mode === 'object') {
+    objectModeBtn.classList.add("active");
+    editModeBtn.classList.remove("active");
+    
+    // Hide submodes
+    editSubmodesDivider.style.display = "none";
+    vertexSelectBtn.style.display = "none";
+    edgeSelectBtn.style.display = "none";
+    faceSelectBtn.style.display = "none";
+    
+    // Clear selections
+    events.selectedVertices = [];
+    if (events.selectedObject) {
+      events.selectedObject.selectedVertexIndex = undefined;
+      events.selectedObject.selectedEdgeVertices = undefined;
+      events.selectedObject.highlightedFace = undefined;
+    }
+    
+    // Show gizmo centered on object
+    if (events.selectedObject && events.gizmo) {
+      events.gizmo.visible = true;
+      events.updateGizmoPosition(events.selectedObject);
+    }
+  } else {
+    objectModeBtn.classList.remove("active");
+    editModeBtn.classList.add("active");
+    
+    // Show submodes
+    editSubmodesDivider.style.display = "block";
+    vertexSelectBtn.style.display = "flex";
+    edgeSelectBtn.style.display = "flex";
+    faceSelectBtn.style.display = "flex";
+    
+    // Set default submode to vertex
+    setEditSubMode('vertex');
+  }
+}
+
+function setEditSubMode(submode: 'vertex' | 'edge' | 'face') {
+  events.editSubMode = submode;
+  webgl.editSubMode = submode;
+  
+  // Update button active states
+  vertexSelectBtn.classList.toggle("active", submode === 'vertex');
+  edgeSelectBtn.classList.toggle("active", submode === 'edge');
+  faceSelectBtn.classList.toggle("active", submode === 'face');
+  
+  // Clear sub-selections
+  events.selectedVertices = [];
+  if (events.selectedObject) {
+    events.selectedObject.selectedVertexIndex = undefined;
+    events.selectedObject.selectedEdgeVertices = undefined;
+    events.selectedObject.highlightedFace = undefined;
+  }
+  
+  if (events.gizmo) {
+    events.gizmo.visible = false; // Hide gizmo until something is selected
+  }
+}
+
+objectModeBtn.addEventListener("click", () => setEditorMode('object'));
+editModeBtn.addEventListener("click", () => setEditorMode('edit'));
+vertexSelectBtn.addEventListener("click", () => setEditSubMode('vertex'));
+edgeSelectBtn.addEventListener("click", () => setEditSubMode('edge'));
+faceSelectBtn.addEventListener("click", () => setEditSubMode('face'));
+
+// Add keyboard shortcuts (O/E to toggle modes, 1/2/3 to toggle submodes)
+document.addEventListener("keydown", (e) => {
+  if (
+    document.activeElement instanceof HTMLInputElement ||
+    document.activeElement instanceof HTMLTextAreaElement
+  ) {
+    return;
+  }
+  const key = e.key.toLowerCase();
+  if (key === "o") {
+    setEditorMode('object');
+  } else if (key === "e") {
+    setEditorMode('edit');
+  } else if (key === "1" && events.editorMode === 'edit') {
+    setEditSubMode('vertex');
+  } else if (key === "2" && events.editorMode === 'edit') {
+    setEditSubMode('edge');
+  } else if (key === "3" && events.editorMode === 'edit') {
+    setEditSubMode('face');
+  }
+});
+
 // Handle adding objects
 // Reusable function to handle adding objects
 function handleAddObject(type: string, subtype: string) {
@@ -1444,6 +1546,11 @@ function animate() {
     (document.getElementById("camera-pos-y") as HTMLInputElement).value = camera.eye.y.toFixed(2);
     (document.getElementById("camera-pos-z") as HTMLInputElement).value = camera.eye.z.toFixed(2);
   }
+
+  // Sync isSelected flag for rendering selection highlights
+  scene.objects.forEach((obj: any) => {
+    obj.isSelected = !!(selectedObject && obj.uuid === selectedObject.uuid);
+  });
 
   // Render
   webgl.Render(program, camera, scene);

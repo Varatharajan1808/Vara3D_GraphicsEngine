@@ -44,6 +44,12 @@ export class RenderableMeshObject extends SceneNode {
   isGizmoPart?: boolean;
   visible: boolean = false;
   isSelected: boolean;
+  wireframeIndexBuffer?: WebGLBuffer | null;
+  wireframeIndexCount?: number;
+  selectedVertexIndex?: number;
+  selectedEdgeVertices?: number[];
+  hoveredVertexIndex?: number;
+  hoveredEdgeVertices?: number[];
   isHovered: boolean = false;
   isActive: boolean = false;
   originalBoundingBox?: BoundingBox;
@@ -150,9 +156,9 @@ export class RenderableMeshObject extends SceneNode {
     this.updateLocalMatrix();
   }
   updateBoundingBox(): void {
-    if (!this.geometry || !this.geometry.Vertices) return;
+    if (!this.vertices) return;
     const worldMatrix = this.getWorldMatrix();
-    const vertexCount = this.geometry.Vertices.length / 3;
+    const vertexCount = this.vertices.length / 3;
     if (vertexCount === 0) return;
     const worldVertex = vec3.create();
     const vertex = vec3.create();
@@ -162,9 +168,9 @@ export class RenderableMeshObject extends SceneNode {
 
     // Process all vertices
     for (let i = 0; i < vertexCount; i++) {
-      vertex[0] = this.geometry.Vertices[i * 3];
-      vertex[1] = this.geometry.Vertices[i * 3 + 1];
-      vertex[2] = this.geometry.Vertices[i * 3 + 2];
+      vertex[0] = this.vertices[i * 3];
+      vertex[1] = this.vertices[i * 3 + 1];
+      vertex[2] = this.vertices[i * 3 + 2];
 
       // Skip invalid vertices
       if (!isFinite(vertex[0]) || !isFinite(vertex[1]) || !isFinite(vertex[2])) continue;
