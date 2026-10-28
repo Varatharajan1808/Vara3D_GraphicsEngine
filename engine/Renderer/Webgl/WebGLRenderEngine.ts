@@ -21,6 +21,7 @@ import { NormalsData } from "../../GeometryPrimitives/SurfaceNormalCalculator";
 import { Tangents } from "../../GeometryPrimitives/TangentSpaceCalculator";
 import {
   isSphereInFrustum,
+  isAABBInFrustum,
   createBoundingSphere,
   extractFrustumPlanes,
 } from "./ViewFrustumCuller";
@@ -56,6 +57,7 @@ export class WebGLRenderEngine {
   editorMode: string = "object";
   editSubMode: string = "vertex";
   pointProgram: WebGLProgram | null = null;
+  public frustumCulling: boolean = true;
 
   private _currentDrawCalls: number = 0;
   private _currentVertices: number = 0;
@@ -496,6 +498,7 @@ export class WebGLRenderEngine {
 
     const drawMesh = (mesh: any, disableDepthTest: boolean = false) => {
       if (!mesh || (mesh.type === "Grid-Geometry" && mesh.visible === false)) return;
+      if (mesh.visible === false) return;
 
       const geometryType = mesh.geometry?.type as keyof typeof geometryMap;
       const data = geometryMap[geometryType] || {
@@ -861,8 +864,31 @@ export class WebGLRenderEngine {
     };
 
     // Separate objects into selected and non-selected
-    const selectedObjects = objects.filter((mesh: any) => mesh.isSelected);
-    const nonSelectedObjects = objects.filter((mesh: any) => !mesh.isSelected);
+    // Frustum culling: filter out objects outside camera view
+    const visibleObjects = objects.filter((mesh: any) => {
+      if (!mesh) return false;
+      if (mesh.type === "Grid-Geometry") {
+        return mesh.visible !== false;
+      }
+      if (mesh.visible === false) return false;
+
+      // Apply frustum culling using AABB if enabled and planes exist
+      if (this.frustumCulling && frustumPlanes && frustumPlanes.length === 6) {
+        if (!mesh.boundingBox && mesh.updateBoundingBox) {
+          mesh.updateBoundingBox();
+        }
+        if (mesh.boundingBox) {
+          return isAABBInFrustum(frustumPlanes, mesh.boundingBox.min, mesh.boundingBox.max);
+        }
+        if (mesh.boundingSphere) {
+          return isSphereInFrustum(frustumPlanes, mesh.boundingSphere);
+        }
+      }
+      return true;
+    });
+
+    const selectedObjects = visibleObjects.filter((mesh: any) => mesh.isSelected);
+    const nonSelectedObjects = visibleObjects.filter((mesh: any) => !mesh.isSelected);
 
     // Separate opaque and transparent objects for both groups
     const opaqueSelected = selectedObjects.filter(
