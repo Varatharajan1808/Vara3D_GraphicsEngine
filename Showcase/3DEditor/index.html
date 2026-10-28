@@ -257,8 +257,8 @@
         <div class="dropdown-menu" id="file-menu">
           <button class="dropdown-item" id="new-scene-btn">New Scene</button>
           <div class="dropdown-divider"></div>
-          <button class="dropdown-item" id="import-gltf-btn">Import GLTF (Files)</button>
-          <button class="dropdown-item" id="import-gltf-folder-btn">Import GLTF (Folder)</button>
+          <button class="dropdown-item" id="import-gltf-btn">Import Model (.gltf, .glb, .zip)</button>
+          <button class="dropdown-item" id="import-gltf-folder-btn">Import Model Folder</button>
           <button class="dropdown-item" id="export-gltf-btn">Export GLTF</button>
         </div>
       </div>
@@ -632,7 +632,7 @@
   </div>
 
   <!-- Hidden file input for GLTF import -->
-  <input type="file" id="gltf-file-input" accept=".gltf,.glb,.bin" multiple />
+  <input type="file" id="gltf-file-input" accept=".gltf,.glb,.bin,.zip" multiple />
   <input type="file" id="gltf-folder-input" webkitdirectory style="display: none;" />
 
   <script type="module" src="./EditorApplication.js"></script>

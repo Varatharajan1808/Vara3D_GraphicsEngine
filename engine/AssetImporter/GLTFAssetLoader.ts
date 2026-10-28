@@ -19,6 +19,7 @@ interface GLTFNode {
 interface GLTFMesh {
   primitives: GLTFPrimitive[];
 }
+
 interface BufferCreationOptions {
   node: GLTFNode;
   attributes: {
@@ -44,6 +45,7 @@ interface BufferCreationOptions {
   imageUri: string | null;
   normalMapUri: string | null;
 }
+
 interface GLTFPrimitive {
   attributes: {
     POSITION: number;
@@ -56,7 +58,7 @@ interface GLTFPrimitive {
 }
 
 interface GLTFScene {
-  nodes: number[];
+  nodes?: number[];
 }
 
 interface GLTFAccessor {
@@ -64,15 +66,22 @@ interface GLTFAccessor {
   byteOffset?: number;
   componentType?: number;
   count: number;
+  min?: number[];
+  max?: number[];
+  type?: string;
 }
 
 interface GLTFBufferView {
+  buffer?: number;
   byteOffset?: number;
   byteLength: number;
+  byteStride?: number;
+  target?: number;
 }
 
 interface GLTFBuffer {
-  uri: string;
+  uri?: string;
+  byteLength?: number;
 }
 
 interface GLTFTexture {
@@ -111,12 +120,13 @@ interface GLTFMaterial {
 }
 
 interface GLTFData {
-  scenes: GLTFScene[];
-  nodes: GLTFNode[];
-  meshes: GLTFMesh[];
-  accessors: GLTFAccessor[];
-  bufferViews: GLTFBufferView[];
-  buffers: GLTFBuffer[];
+  scene?: number;
+  scenes?: GLTFScene[];
+  nodes?: GLTFNode[];
+  meshes?: GLTFMesh[];
+  accessors?: GLTFAccessor[];
+  bufferViews?: GLTFBufferView[];
+  buffers?: GLTFBuffer[];
   textures?: GLTFTexture[];
   images?: GLTFImage[];
   materials?: GLTFMaterial[];
@@ -169,11 +179,6 @@ interface MaterialProperties {
   emissionIntensity: number;
 }
 
-// Scene is not well-defined in the original code
-// interface Scene {
-//   add: (mesh: Mesh) => void;
-// }
-
 export class GLTFAssetLoader {
   gl: WebGLRenderingContext;
   scene: SceneHierarchyManager;
@@ -193,57 +198,114 @@ export class GLTFAssetLoader {
     this.importedMeshes = [];
     this.textureURIs = [];
   }
+
+  /**
+   * Load JSON GLTF from a URL (backwards compatible helper).
+   */
   async loadGLTF(url: string): Promise<GLTFData> {
     const response = await fetch(url);
     if (!response.ok)
       throw new Error(`Failed to load GLTF: ${response.statusText}`);
     return (await response.json()) as GLTFData;
   }
-  decodeBase64(base64: string): ArrayBuffer {
-    const binaryString = atob(base64.split(",")[1]);
-    const bytes = new Uint8Array(binaryString.length);
-    for (let i = 0; i < binaryString.length; i++) {
-      bytes[i] = binaryString.charCodeAt(i);
+
+  /**
+   * Fast base64 data URI decoding using native browser fetch with synchronous fallback.
+   */
+  async decodeBase64(base64: string): Promise<ArrayBuffer> {
+    try {
+      const res = await fetch(base64);
+      return await res.arrayBuffer();
+    } catch {
+      const binaryString = atob(base64.split(",")[1]);
+      const bytes = new Uint8Array(binaryString.length);
+      for (let i = 0; i < binaryString.length; i++) {
+        bytes[i] = binaryString.charCodeAt(i);
+      }
+      return bytes.buffer;
     }
-    return bytes.buffer;
   }
+
+  /**
+   * Parse binary GLB (0x46546C67 = "glTF") into GLTF structure and raw binary chunk.
+   */
+  parseGLB(arrayBuffer: ArrayBuffer): { gltfData: GLTFData; bufferData: ArrayBuffer } {
+    const dataView = new DataView(arrayBuffer);
+    const magic = dataView.getUint32(0, true);
+    if (magic !== 0x46546c67) {
+      throw new Error("Invalid GLB format: magic header is not 0x46546C67 (glTF)");
+    }
+    const version = dataView.getUint32(4, true);
+    if (version !== 2) {
+      console.warn(`GLB version ${version} detected; expected 2.`);
+    }
+    const totalLength = dataView.getUint32(8, true);
+
+    let offset = 12;
+    let gltfData: GLTFData | null = null;
+    let bufferData: ArrayBuffer = new ArrayBuffer(0);
+
+    while (offset < totalLength && offset < arrayBuffer.byteLength) {
+      const chunkLength = dataView.getUint32(offset, true);
+      const chunkType = dataView.getUint32(offset + 4, true);
+      offset += 8;
+
+      if (chunkType === 0x4e4f534a) {
+        // 0x4E4F534A = "JSON"
+        const jsonBytes = new Uint8Array(arrayBuffer, offset, chunkLength);
+        const jsonString = new TextDecoder("utf-8").decode(jsonBytes);
+        gltfData = JSON.parse(jsonString) as GLTFData;
+      } else if (chunkType === 0x004e4942) {
+        // 0x004E4942 = "BIN\0"
+        bufferData = arrayBuffer.slice(offset, offset + chunkLength);
+      }
+
+      offset += chunkLength;
+      // GLB chunks are aligned to 4-byte boundaries
+      offset = (offset + 3) & ~3;
+    }
+
+    if (!gltfData) {
+      throw new Error("Invalid GLB: Missing JSON chunk");
+    }
+
+    return { gltfData, bufferData };
+  }
+
+  /**
+   * Load texture from a binary buffer view directly using Blob URL (no CPU freeze).
+   */
   async loadTextureFromBuffer(
     bufferData: Uint8Array,
     mimeType: string
   ): Promise<WebGLTexture | null> {
     const blob = new Blob([new Uint8Array(bufferData)], { type: mimeType });
     const url = URL.createObjectURL(blob);
-    const texture = await this.loadTexture.loadTexture(this.gl, url);
+    const textureData = await this.loadTexture.loadTextureAsync(url);
     URL.revokeObjectURL(url);
-    return texture;
+    return textureData.texture;
   }
+
+  /**
+   * Process and decode all textures in parallel without blocking the main CPU thread.
+   */
   async processTextures(
     gltfData: GLTFData,
-    bufferData: ArrayBuffer,
+    buffers: ArrayBuffer | ArrayBuffer[],
     fileMap?: Map<string, File>
   ): Promise<(WebGLTexture | null)[]> {
     const textures: (WebGLTexture | null)[] = [];
     const textureURIs: (string | null)[] = [];
 
-    function bufferToBase64(buffer: Uint8Array): string {
-      let binary = "";
-      const chunkSize = 8192;
-      for (let i = 0; i < buffer.length; i += chunkSize) {
-        binary += String.fromCharCode.apply(null, [
-          ...buffer.subarray(i, i + chunkSize),
-        ]);
-      }
-      return btoa(binary);
-    }
+    if (!gltfData.images || gltfData.images.length === 0) return textures;
 
-    if (!gltfData.images) return textures;
-
-    for (let i = 0; i < gltfData.images.length; i++) {
-      const image = gltfData.images[i];
+    // Process textures in parallel with Promise.all
+    const promises = gltfData.images.map(async (image, i) => {
       try {
         if (image.uri) {
           let uri = image.uri;
           let loadUrl = image.uri;
+          let isBlob = false;
 
           // Resolve external image files from the fileMap
           if (!uri.startsWith("data:") && fileMap) {
@@ -251,59 +313,83 @@ export class GLTFAssetLoader {
             const file = fileMap.get(fileName) || fileMap.get(uri);
             if (file) {
               loadUrl = URL.createObjectURL(file);
+              isBlob = true;
             }
           }
 
-          if (uri.startsWith("data:image/")) uri = uri.split(",")[1];
-          textureURIs[i] = uri;
-          textures[i] = await this.loadTexture.loadTexture(this.gl, loadUrl);
+          const textureData = await this.loadTexture.loadTextureAsync(loadUrl);
+          textures[i] = textureData.texture;
+          textureURIs[i] = textureData.base64Image || uri;
 
-          // Revoke blob URL if we created one
-          if (loadUrl !== image.uri) URL.revokeObjectURL(loadUrl);
-        } else if (image.bufferView !== undefined) {
+          if (isBlob) {
+            URL.revokeObjectURL(loadUrl);
+          }
+        } else if (image.bufferView !== undefined && gltfData.bufferViews) {
           const view = gltfData.bufferViews[image.bufferView];
+          const targetBuffer = Array.isArray(buffers)
+            ? (buffers[view.buffer ?? 0] || buffers[0])
+            : buffers;
+
           const imageBuffer = new Uint8Array(
-            bufferData,
+            targetBuffer,
             view.byteOffset || 0,
             view.byteLength
           );
-          const base64 = bufferToBase64(imageBuffer);
-          textureURIs[i] = base64;
-          textures[i] = await this.loadTextureFromBuffer(
-            imageBuffer,
-            image.mimeType || "image/png"
-          );
+          const mimeType = image.mimeType || "image/png";
+          const blob = new Blob([imageBuffer], { type: mimeType });
+          const blobUrl = URL.createObjectURL(blob);
+
+          const textureData = await this.loadTexture.loadTextureAsync(blobUrl);
+          textures[i] = textureData.texture;
+          textureURIs[i] = textureData.base64Image || null;
+
+          URL.revokeObjectURL(blobUrl);
         }
       } catch (error) {
         console.warn(`Texture load failed for image[${i}]:`, error);
         textures[i] = null;
         textureURIs[i] = null;
       }
-    }
+    });
+
+    await Promise.all(promises);
 
     this.textureURIs = textureURIs;
     return textures;
   }
+
   /**
    * Resolve buffer data from a GLTF buffer URI.
-   * Handles: data URIs (base64) and external files (via fileMap).
+   * Handles: data URIs (base64), external files (fileMap), and relative network URLs.
    */
   private async resolveBufferData(
     bufferUri: string,
-    fileMap?: Map<string, File>
+    fileMap?: Map<string, File>,
+    baseUrl?: string
   ): Promise<ArrayBuffer> {
     // Case 1: Embedded base64 data URI
     if (bufferUri.startsWith("data:")) {
-      return this.decodeBase64(bufferUri);
+      return await this.decodeBase64(bufferUri);
     }
 
-    // Case 2: External file reference — look up in the user-provided fileMap
+    // Case 2: External file reference — look up in user-provided fileMap
     if (fileMap) {
       const fileName = bufferUri.split("/").pop() || bufferUri;
       const file = fileMap.get(fileName) || fileMap.get(bufferUri);
       if (file) {
         return await file.arrayBuffer();
       }
+    }
+
+    // Case 3: Network fetch fallback if loaded via web URL
+    if (baseUrl && !baseUrl.startsWith("blob:")) {
+      try {
+        const resolvedUrl = new URL(bufferUri, baseUrl).href;
+        const res = await fetch(resolvedUrl);
+        if (res.ok) {
+          return await res.arrayBuffer();
+        }
+      } catch (_) {}
     }
 
     // No match found — give a helpful error
@@ -314,22 +400,59 @@ export class GLTFAssetLoader {
     );
   }
 
+  /**
+   * Main entry point to load models (.gltf or .glb).
+   */
   async main(urls: string[], fileMap?: Map<string, File>): Promise<void> {
     for (const url of urls) {
       try {
-        const gltfData = await this.loadGLTF(url);
-        const bufferData = await this.resolveBufferData(
-          gltfData.buffers[0].uri,
-          fileMap
-        );
-        const textures = await this.processTextures(gltfData, bufferData, fileMap);
+        const response = await fetch(url);
+        if (!response.ok) {
+          throw new Error(`Failed to load: ${response.statusText}`);
+        }
+        const arrayBuffer = await response.arrayBuffer();
+
+        // Detect if binary GLB by checking 4-byte magic (0x46546C67 = "glTF")
+        const isGLB =
+          arrayBuffer.byteLength >= 12 &&
+          new DataView(arrayBuffer).getUint32(0, true) === 0x46546c67;
+
+        let gltfData: GLTFData;
+        const buffers: ArrayBuffer[] = [];
+
+        if (isGLB) {
+          const { gltfData: parsedGltf, bufferData } = this.parseGLB(arrayBuffer);
+          gltfData = parsedGltf;
+          buffers[0] = bufferData;
+        } else {
+          const jsonText = new TextDecoder("utf-8").decode(new Uint8Array(arrayBuffer));
+          gltfData = JSON.parse(jsonText) as GLTFData;
+        }
+
+        // Resolve external or remaining buffers
+        if (gltfData.buffers && gltfData.buffers.length > 0) {
+          for (let b = 0; b < gltfData.buffers.length; b++) {
+            if (buffers[b]) continue; // Already loaded via GLB binary chunk
+            const buf = gltfData.buffers[b];
+            if (buf.uri) {
+              const data = await this.resolveBufferData(buf.uri, fileMap, url);
+              buffers[b] = data;
+            }
+          }
+        }
+
+        if (buffers.length === 0) {
+          buffers[0] = new ArrayBuffer(0);
+        }
+
+        // Process textures asynchronously in parallel
+        const textures = await this.processTextures(gltfData, buffers, fileMap);
 
         this.nodeMap.clear();
         this.buffer = [];
 
-        // Create a root wrapper node for the entire GLTF import
-        // Extract a readable name from the URL or fileMap
-        let rootName = "GLTF_Import";
+        // Extract a readable root node name from fileMap or URL
+        let rootName = "Imported_Model";
         if (fileMap) {
           for (const [name] of fileMap) {
             if (name.endsWith(".gltf") || name.endsWith(".glb")) {
@@ -337,61 +460,88 @@ export class GLTFAssetLoader {
               break;
             }
           }
-        }
-        const rootNode = new SceneNode(rootName);
-        this.scene.add(rootNode);
-
-        for (let i = 0; i < gltfData.scenes.length; i++) {
-          const scene = gltfData.scenes[i];
-          for (let j = 0; j < scene.nodes.length; j++) {
-            const nodeIndex = scene.nodes[j];
-            this.processNode(
-              nodeIndex,
-              rootNode,
-              gltfData,
-              bufferData,
-              textures
-            );
+        } else {
+          const urlBase = url.split("/").pop()?.split("?")[0];
+          if (urlBase && !urlBase.startsWith("blob:")) {
+            rootName = urlBase.replace(/\.(gltf|glb)$/i, "");
           }
         }
 
-        // Update world matrices from the root down
+        const rootNode = new SceneNode(rootName);
+        this.scene.add(rootNode);
+
+        // Find root nodes to process
+        const rootIndices: number[] = [];
+        if (gltfData.scenes && gltfData.scenes.length > 0) {
+          const sceneIdx = gltfData.scene !== undefined ? gltfData.scene : 0;
+          const targetScene = gltfData.scenes[sceneIdx] || gltfData.scenes[0];
+          if (targetScene && targetScene.nodes) {
+            rootIndices.push(...targetScene.nodes);
+          }
+        } else if (gltfData.nodes) {
+          const childSet = new Set<number>();
+          for (const n of gltfData.nodes) {
+            if (n.children) {
+              for (const c of n.children) childSet.add(c);
+            }
+          }
+          for (let idx = 0; idx < gltfData.nodes.length; idx++) {
+            if (!childSet.has(idx)) rootIndices.push(idx);
+          }
+        }
+
+        for (const nodeIndex of rootIndices) {
+          this.processNode(
+            nodeIndex,
+            rootNode,
+            gltfData,
+            buffers,
+            textures
+          );
+        }
+
+        // Update world matrices from root down
         rootNode.updateWorldMatrix();
       } catch (err) {
-        console.error(`GLTF Load Error (${url}):`, err);
+        console.error(`GLTF/GLB Load Error (${url}):`, err);
+        throw err;
       }
     }
   }
+
   processNode(
     nodeIndex: number,
     parentNode: SceneNode | null,
     gltfData: GLTFData,
-    bufferData: ArrayBuffer,
+    buffers: ArrayBuffer | ArrayBuffer[],
     textures: (WebGLTexture | null)[]
   ): void {
+    if (!gltfData.nodes || !gltfData.nodes[nodeIndex]) return;
     const nodeData = gltfData.nodes[nodeIndex];
     if (this.nodeMap.has(nodeIndex)) return;
 
     const gltfMesh =
-      nodeData.mesh !== undefined ? gltfData.meshes[nodeData.mesh] : null;
+      (nodeData.mesh !== undefined && gltfData.meshes)
+        ? gltfData.meshes[nodeData.mesh]
+        : null;
 
     let currentNode: SceneNode;
 
     // Determine if we can merge the node and a single primitive mesh
-    if (gltfMesh && gltfMesh.primitives.length === 1) {
+    if (gltfMesh && gltfMesh.primitives && gltfMesh.primitives.length === 1) {
       // MERGE: Create a RenderableMeshObject directly for the node
       currentNode = this.getMeshForPrimitive(
         gltfMesh.primitives[0],
         nodeData,
         gltfData,
-        bufferData,
+        buffers,
         textures
       );
     } else {
       // GROUP: Create a standard SceneNode (either empty or with multiple primitives)
       currentNode = new SceneNode(nodeData.name || `Node_${nodeIndex}`);
 
-      if (gltfMesh) {
+      if (gltfMesh && gltfMesh.primitives) {
         // Add multiple primitives as children
         for (let i = 0; i < gltfMesh.primitives.length; i++) {
           const primitive = gltfMesh.primitives[i];
@@ -399,7 +549,7 @@ export class GLTFAssetLoader {
             primitive,
             { name: `${currentNode.name}_Primitive_${i}` },
             gltfData,
-            bufferData,
+            buffers,
             textures
           );
           primMesh.setParent(currentNode);
@@ -408,7 +558,7 @@ export class GLTFAssetLoader {
       }
     }
 
-    // Apply Transformation to the current node (either the merged mesh or the group node)
+    // Apply Transformation to current node
     this.applyTransformToNode(currentNode, nodeData);
 
     if (parentNode) {
@@ -421,7 +571,7 @@ export class GLTFAssetLoader {
     // Recursively process children
     if (nodeData.children) {
       for (const childIndex of nodeData.children) {
-        this.processNode(childIndex, currentNode, gltfData, bufferData, textures);
+        this.processNode(childIndex, currentNode, gltfData, buffers, textures);
       }
     }
   }
@@ -453,7 +603,7 @@ export class GLTFAssetLoader {
     node.updateLocalMatrix();
   }
 
-  private quaternionToEuler(quaternion: [number, number, number, number]): { x: number, y: number, z: number } {
+  private quaternionToEuler(quaternion: [number, number, number, number]): { x: number; y: number; z: number } {
     const [x, y, z, w] = quaternion;
     return {
       x: Math.atan2(2 * (w * x + y * z), 1 - 2 * (x * x + y * y)),
@@ -466,7 +616,7 @@ export class GLTFAssetLoader {
     primitive: GLTFPrimitive,
     nodeData: { name?: string },
     gltfData: GLTFData,
-    bufferData: ArrayBuffer,
+    buffers: ArrayBuffer | ArrayBuffer[],
     textures: (WebGLTexture | null)[]
   ): RenderableMeshObject {
     const matData = this.getMaterialData(primitive, gltfData);
@@ -487,7 +637,7 @@ export class GLTFAssetLoader {
 
     const attributes = this.getPrimitiveAttributes(
       gltfData,
-      bufferData,
+      buffers,
       primitive
     );
 
@@ -518,11 +668,14 @@ export class GLTFAssetLoader {
       scale: [1, 1, 1],
     };
 
-    // We do NOT add it to the scene here, the caller will decide
-    return this.createRenderableMesh(meshData);
+    return this.createRenderableMesh(meshData, primitive, gltfData);
   }
 
-  private createRenderableMesh(meshData: MeshData): RenderableMeshObject {
+  private createRenderableMesh(
+    meshData: MeshData,
+    primitive?: GLTFPrimitive,
+    gltfData?: GLTFData
+  ): RenderableMeshObject {
     const geometry = this.createGeometry(meshData);
     const material = this.createMaterial(meshData);
 
@@ -550,8 +703,23 @@ export class GLTFAssetLoader {
       }
     );
 
-    // Initial bounding box setup
-    if (meshData.positions?.length) {
+    // Fast bounding box setup: use accessor min/max (O(1)) if available, else loop
+    const posAccessorIdx = primitive?.attributes?.POSITION;
+    const posAccessor = (posAccessorIdx !== undefined && gltfData?.accessors)
+      ? gltfData.accessors[posAccessorIdx]
+      : undefined;
+
+    if (
+      posAccessor?.min &&
+      posAccessor?.max &&
+      posAccessor.min.length >= 3 &&
+      posAccessor.max.length >= 3
+    ) {
+      mesh.originalBoundingBox = {
+        min: [posAccessor.min[0], posAccessor.min[1], posAccessor.min[2]],
+        max: [posAccessor.max[0], posAccessor.max[1], posAccessor.max[2]],
+      };
+    } else if (meshData.positions?.length) {
       mesh.originalBoundingBox = {
         min: [Infinity, Infinity, Infinity],
         max: [-Infinity, -Infinity, -Infinity],
@@ -568,12 +736,14 @@ export class GLTFAssetLoader {
     mesh.updateBoundingBox();
     return mesh;
   }
+
   getMaterialData(primitive: GLTFPrimitive, gltfData: GLTFData) {
     const matIndex = primitive.material ?? -1;
     return matIndex >= 0 && gltfData.materials
       ? gltfData.materials[matIndex]
       : {};
   }
+
   getMaterialProperties(matData: any, pbr: any) {
     const baseColorAlpha =
       pbr.baseColorFactor && pbr.baseColorFactor.length > 3
@@ -593,6 +763,7 @@ export class GLTFAssetLoader {
       alpha: baseColorAlpha ?? matData.alphaCutoff ?? 1.0,
     };
   }
+
   getTextureData(
     textureIndex: number | undefined,
     gltfData: GLTFData,
@@ -612,38 +783,134 @@ export class GLTFAssetLoader {
 
     return { texture, imageUri };
   }
+
+  /**
+   * Compute smooth / flat normals for primitives that omit normal vectors.
+   */
+  private generateFlatNormals(
+    positions: Float32Array,
+    indices?: Uint16Array | Uint32Array
+  ): Float32Array {
+    const normals = new Float32Array(positions.length);
+
+    if (indices && indices.length > 0) {
+      for (let i = 0; i < indices.length; i += 3) {
+        const i0 = indices[i] * 3;
+        const i1 = indices[i + 1] * 3;
+        const i2 = indices[i + 2] * 3;
+
+        const ax = positions[i1] - positions[i0];
+        const ay = positions[i1 + 1] - positions[i0 + 1];
+        const az = positions[i1 + 2] - positions[i0 + 2];
+
+        const bx = positions[i2] - positions[i0];
+        const by = positions[i2 + 1] - positions[i0 + 1];
+        const bz = positions[i2 + 2] - positions[i0 + 2];
+
+        let nx = ay * bz - az * by;
+        let ny = az * bx - ax * bz;
+        let nz = ax * by - ay * bx;
+        const len = Math.hypot(nx, ny, nz);
+        if (len > 0.00001) {
+          nx /= len;
+          ny /= len;
+          nz /= len;
+        }
+
+        normals[i0] += nx;
+        normals[i0 + 1] += ny;
+        normals[i0 + 2] += nz;
+
+        normals[i1] += nx;
+        normals[i1 + 1] += ny;
+        normals[i1 + 2] += nz;
+
+        normals[i2] += nx;
+        normals[i2 + 1] += ny;
+        normals[i2 + 2] += nz;
+      }
+
+      for (let i = 0; i < normals.length; i += 3) {
+        const len = Math.hypot(normals[i], normals[i + 1], normals[i + 2]);
+        if (len > 0.00001) {
+          normals[i] /= len;
+          normals[i + 1] /= len;
+          normals[i + 2] /= len;
+        } else {
+          normals[i + 1] = 1.0;
+        }
+      }
+    } else {
+      for (let i = 0; i < positions.length; i += 9) {
+        const ax = positions[i + 3] - positions[i];
+        const ay = positions[i + 4] - positions[i + 1];
+        const az = positions[i + 5] - positions[i + 2];
+
+        const bx = positions[i + 6] - positions[i];
+        const by = positions[i + 7] - positions[i + 1];
+        const bz = positions[i + 8] - positions[i + 2];
+
+        let nx = ay * bz - az * by;
+        let ny = az * bx - ax * bz;
+        let nz = ax * by - ay * bx;
+        const len = Math.hypot(nx, ny, nz);
+        if (len > 0.00001) {
+          nx /= len;
+          ny /= len;
+          nz /= len;
+        } else {
+          ny = 1.0;
+        }
+
+        for (let v = 0; v < 3; v++) {
+          normals[i + v * 3] = nx;
+          normals[i + v * 3 + 1] = ny;
+          normals[i + v * 3 + 2] = nz;
+        }
+      }
+    }
+
+    return normals;
+  }
+
   getPrimitiveAttributes(
     gltfData: GLTFData,
-    bufferData: ArrayBuffer,
+    buffers: ArrayBuffer | ArrayBuffer[],
     primitive: GLTFPrimitive
   ) {
     const indicesArray = this.getIndexArray(
       gltfData,
-      bufferData,
+      buffers,
       primitive.indices
     );
+    const positions = this.getAttributeArray(
+      gltfData,
+      buffers,
+      primitive.attributes.POSITION,
+      3
+    );
+    let normals = this.getAttributeArray(
+      gltfData,
+      buffers,
+      primitive.attributes.NORMAL,
+      3
+    );
+    if ((!normals || normals.length === 0) && positions.length > 0) {
+      normals = this.generateFlatNormals(positions, indicesArray || undefined);
+    }
+
     return {
-      positions: this.getAttributeArray(
-        gltfData,
-        bufferData,
-        primitive.attributes.POSITION,
-        3
-      ),
-      normals: this.getAttributeArray(
-        gltfData,
-        bufferData,
-        primitive.attributes.NORMAL,
-        3
-      ),
+      positions,
+      normals,
       texcoords: this.getAttributeArray(
         gltfData,
-        bufferData,
+        buffers,
         primitive.attributes.TEXCOORD_0,
         2
       ),
       tangents: this.getAttributeArray(
         gltfData,
-        bufferData,
+        buffers,
         primitive.attributes.TANGENT,
         4
       ),
@@ -653,54 +920,84 @@ export class GLTFAssetLoader {
 
   getAttributeArray(
     gltfData: GLTFData,
-    bufferData: ArrayBuffer,
+    buffers: ArrayBuffer | ArrayBuffer[],
     attrIndex: number | undefined,
     components: number
   ): Float32Array {
-    if (attrIndex === undefined) return new Float32Array(0);
+    if (attrIndex === undefined || !gltfData.accessors) return new Float32Array(0);
 
     const accessor = gltfData.accessors[attrIndex];
+    if (!accessor || !gltfData.bufferViews) return new Float32Array(0);
+
     const view = gltfData.bufferViews[accessor.bufferView];
+    if (!view) return new Float32Array(0);
+
+    const bufferData = Array.isArray(buffers)
+      ? (buffers[view.buffer ?? 0] || buffers[0])
+      : buffers;
 
     const byteOffset = (view.byteOffset || 0) + (accessor.byteOffset || 0);
     const length = accessor.count * components;
-    const aligned = byteOffset % 4 === 0;
 
+    // Handle interleaved attributes if byteStride is present
+    if (view.byteStride && view.byteStride !== components * 4) {
+      const result = new Float32Array(length);
+      const dataView = new DataView(bufferData);
+      const stride = view.byteStride;
+      for (let i = 0; i < accessor.count; i++) {
+        const itemOffset = byteOffset + i * stride;
+        for (let c = 0; c < components; c++) {
+          result[i * components + c] = dataView.getFloat32(itemOffset + c * 4, true);
+        }
+      }
+      return result;
+    }
+
+    const aligned = byteOffset % 4 === 0;
     if (aligned) {
       try {
         return new Float32Array(bufferData, byteOffset, length);
       } catch (e) {
-        // Handle alignment issues by falling back to copying
-        const sliced = new Uint8Array(bufferData).slice(
-          byteOffset,
-          byteOffset + length * 4
-        );
-        return new Float32Array(sliced.buffer);
+        const sliced = bufferData.slice(byteOffset, byteOffset + length * 4);
+        return new Float32Array(sliced);
       }
     }
 
-    const sliced = new Uint8Array(bufferData).slice(
-      byteOffset,
-      byteOffset + length * 4
-    );
-    return new Float32Array(sliced.buffer);
+    const sliced = bufferData.slice(byteOffset, byteOffset + length * 4);
+    return new Float32Array(sliced);
   }
+
   getIndexArray(
     gltfData: GLTFData,
-    bufferData: ArrayBuffer,
+    buffers: ArrayBuffer | ArrayBuffer[],
     indexAccessorIdx: number | undefined
   ): Uint16Array | Uint32Array | null {
-    if (indexAccessorIdx === undefined) return null;
+    if (indexAccessorIdx === undefined || !gltfData.accessors) return null;
 
     const accessor = gltfData.accessors[indexAccessorIdx];
+    if (!accessor || !gltfData.bufferViews) return null;
+
     const view = gltfData.bufferViews[accessor.bufferView];
+    if (!view) return null;
+
+    const bufferData = Array.isArray(buffers)
+      ? (buffers[view.buffer ?? 0] || buffers[0])
+      : buffers;
 
     const byteOffset = (view.byteOffset || 0) + (accessor.byteOffset || 0);
     const count = accessor.count;
+    const compType = accessor.componentType ?? 5123;
+
+    // 5121 = UNSIGNED_BYTE -> Convert to Uint16Array for WebGL compatibility
+    if (compType === 5121) {
+      const u8 = new Uint8Array(bufferData, byteOffset, count);
+      return new Uint16Array(u8);
+    }
+
     // 5125 = UNSIGNED_INT (Uint32), 5123 = UNSIGNED_SHORT (Uint16)
-    const isUint32 = accessor.componentType === 5125;
+    const isUint32 = compType === 5125;
     const bytesPerElement = isUint32 ? 4 : 2;
-    const alignment = isUint32 ? 4 : 2;
+    const alignment = bytesPerElement;
     const aligned = byteOffset % alignment === 0;
 
     if (aligned) {
@@ -709,24 +1006,19 @@ export class GLTFAssetLoader {
           ? new Uint32Array(bufferData, byteOffset, count)
           : new Uint16Array(bufferData, byteOffset, count);
       } catch (e) {
-        const sliced = new Uint8Array(bufferData).slice(
-          byteOffset,
-          byteOffset + count * bytesPerElement
-        );
+        const sliced = bufferData.slice(byteOffset, byteOffset + count * bytesPerElement);
         return isUint32
-          ? new Uint32Array(sliced.buffer)
-          : new Uint16Array(sliced.buffer);
+          ? new Uint32Array(sliced)
+          : new Uint16Array(sliced);
       }
     }
 
-    const sliced = new Uint8Array(bufferData).slice(
-      byteOffset,
-      byteOffset + count * bytesPerElement
-    );
+    const sliced = bufferData.slice(byteOffset, byteOffset + count * bytesPerElement);
     return isUint32
-      ? new Uint32Array(sliced.buffer)
-      : new Uint16Array(sliced.buffer);
+      ? new Uint32Array(sliced)
+      : new Uint16Array(sliced);
   }
+
   createGeometry(meshData: MeshData): GeometryData {
     return {
       type: meshData.type ?? "GLTF-Mesh",
@@ -737,6 +1029,7 @@ export class GLTFAssetLoader {
       Tangents: meshData.tangents,
     };
   }
+
   createMaterial(meshData: MeshData): MaterialProperties {
     return this.material.getMaterialProperties({
       color: [
@@ -756,6 +1049,7 @@ export class GLTFAssetLoader {
       emissionIntensity: meshData.emissionIntensity,
     });
   }
+
   loadingGLTF(
     meshData: MeshData,
     scene: SceneHierarchyManager

@@ -1,3 +1,4 @@
+import { ZipArchiveLoader } from "../../engine/CoreUtilities/ZipArchiveLoader";
 import { EditorUIController } from "../../engine/UserInterface/EditorUIController";
 import { ViewHelper } from "../../engine/UserInterface/ViewHelper";
 import { WebGLRenderEngine } from "../../engine/Renderer/Webgl/WebGLRenderEngine";
@@ -224,6 +225,7 @@ function updateSceneGraph() {
       name: node.name || node.type || "Object",
       type: node.type,
       isGizmoPart: (node as any).isGizmoPart || false,
+      visible: (node as any).visible !== false,
       children: convertedChildren
     };
   };
@@ -271,6 +273,42 @@ uiManager.onNodeReparent((childUuid, parentUuid) => {
     updateSceneGraph();
     console.log(`Reparented ${childNode.name} to ${parentNode ? parentNode.name : 'Root'}`);
   }
+});
+
+// Handle node visibility toggle from scene graph
+uiManager.onNodeVisibility((uuid: string, visible: boolean) => {
+  const findNode = (nodes: SceneNode[], targetUuid: string): SceneNode | null => {
+    for (const node of nodes) {
+      if (node.uuid === targetUuid) return node;
+      const found = findNode(node.children, targetUuid);
+      if (found) return found;
+    }
+    return null;
+  };
+
+  const targetNode = findNode(scene.nodes, uuid);
+  if (!targetNode) return;
+
+  const setVisibilityRecursive = (node: SceneNode, v: boolean) => {
+    (node as any).visible = v;
+    for (const child of node.children) {
+      setVisibilityRecursive(child, v);
+    }
+  };
+  setVisibilityRecursive(targetNode, visible);
+
+  if (selectedObject === targetNode && !visible) {
+    if (events.gizmo) {
+      events.gizmo.visible = false;
+    }
+  }
+
+  updateSceneGraph();
+});
+
+// Handle node deletion from scene graph
+uiManager.onNodeDelete((uuid: string) => {
+  deleteObjectFromScene(uuid);
 });
 
 // Handle object selection
@@ -827,6 +865,7 @@ function handleAddObject(type: string, subtype: string) {
         break;
       default:
         return;
+    
     }
 
     if (!geometryData) return;
@@ -990,7 +1029,13 @@ events.onOpenFileMenu = () => {
 
 // Handle New Scene
 document.getElementById("new-scene-btn")?.addEventListener("click", () => {
-  if (confirm("Create new scene? All unsaved changes will be lost.")) {
+  uiManager.showConfirm({
+    title: "New Scene",
+    message: "Create new scene? All unsaved changes will be lost.",
+    confirmText: "Create New",
+    cancelText: "Cancel",
+    isDanger: true,
+    onConfirm: () => {
     // Clear all scene data
     scene.nodes = [];
     scene.objects = [];
@@ -1082,11 +1127,62 @@ document.getElementById("new-scene-btn")?.addEventListener("click", () => {
     }
 
     clearObjectProperties();
-    updateSceneGraph();
-  }
+      updateSceneGraph();
+    }
+  });
 });
 
-// Handle GLTF import
+// Unified model loader for files, folders, and .zip archives
+async function loadModelFromFiles(inputFiles: File[] | FileList): Promise<void> {
+  const files: File[] = Array.from(inputFiles);
+  if (files.length === 0) return;
+
+  let fileMap = new Map<string, File>();
+  let gltfFile: File | null = null;
+
+  // Check if a .zip archive was provided
+  const zipFile = files.find((f) => f.name.toLowerCase().endsWith(".zip"));
+  if (zipFile) {
+    try {
+      fileMap = await ZipArchiveLoader.unzipModelArchive(zipFile);
+      for (const [name, file] of fileMap) {
+        if (name.endsWith(".gltf") || name.endsWith(".glb")) {
+          gltfFile = file;
+          break;
+        }
+      }
+      if (!gltfFile) {
+        uiManager.showAlert("ZIP Archive", "No .gltf or .glb model file found inside the ZIP archive.");
+        return;
+      }
+    } catch (err) {
+      uiManager.showAlert("ZIP Extraction Error", (err as Error).message);
+      return;
+    }
+  } else {
+    for (let i = 0; i < files.length; i++) {
+      const file = files[i];
+      fileMap.set(file.name, file);
+      if (file.name.endsWith(".gltf") || file.name.endsWith(".glb")) {
+        gltfFile = file;
+      }
+    }
+    if (!gltfFile) gltfFile = files[0];
+  }
+
+  const url = URL.createObjectURL(gltfFile);
+  try {
+    await loader.main([url], fileMap);
+    updateSceneGraph();
+  } catch (error) {
+    console.error("Error loading model:", error);
+    uiManager.showAlert("Import Error", `Failed to load model: ${(error as Error).message}`);
+  } finally {
+    URL.revokeObjectURL(url);
+  }
+}
+
+// Handle GLTF / GLB / ZIP file import
 document.getElementById("import-gltf-btn")?.addEventListener("click", () => {
   const fileInput = document.getElementById("gltf-file-input") as HTMLInputElement;
   fileInput.click();
@@ -1095,30 +1191,7 @@ document.getElementById("import-gltf-btn")?.addEventListener("click", () => {
 document.getElementById("gltf-file-input")?.addEventListener("change", async (e) => {
   const files = (e.target as HTMLInputElement).files;
   if (files && files.length > 0) {
-    // Build a file map for resolving external references (e.g. .bin files)
-    const fileMap = new Map<string, File>();
-    let gltfFile: File | null = null;
-
-    for (let i = 0; i < files.length; i++) {
-      const file = files[i];
-      fileMap.set(file.name, file);
-      if (file.name.endsWith(".gltf") || file.name.endsWith(".glb")) {
-        gltfFile = file;
-      }
-    }
-
-    // If no .gltf/.glb found, use the first file
-    if (!gltfFile) gltfFile = files[0];
-
-    const url = URL.createObjectURL(gltfFile);
-    try {
-      await loader.main([url], fileMap);
-      updateSceneGraph();
-    } catch (error) {
-      console.error("Error loading GLTF:", error);
-    }
-    URL.revokeObjectURL(url);
-    // Reset so same files can be selected again
+    await loadModelFromFiles(files);
     (e.target as HTMLInputElement).value = "";
   }
 });
@@ -1132,33 +1205,87 @@ document.getElementById("import-gltf-folder-btn")?.addEventListener("click", () 
 document.getElementById("gltf-folder-input")?.addEventListener("change", async (e) => {
   const files = (e.target as HTMLInputElement).files;
   if (files && files.length > 0) {
-    // Build a file map from all files in the folder
-    const fileMap = new Map<string, File>();
-    let gltfFile: File | null = null;
+    await loadModelFromFiles(files);
+    (e.target as HTMLInputElement).value = "";
+  }
+});
 
-    for (let i = 0; i < files.length; i++) {
-      const file = files[i];
-      fileMap.set(file.name, file);
-      if (file.name.endsWith(".gltf") || file.name.endsWith(".glb")) {
-        gltfFile = file;
+// Handle drag-and-drop of 3D models (.gltf, .glb, .zip, folders) directly onto the viewport
+viewportContainer.addEventListener("dragover", (e) => {
+  e.preventDefault();
+  if (e.dataTransfer) {
+    e.dataTransfer.dropEffect = "copy";
+  }
+  viewportContainer.classList.add("drag-over");
+});
+
+viewportContainer.addEventListener("dragleave", () => {
+  viewportContainer.classList.remove("drag-over");
+});
+
+// Recursive folder & file reader for smooth Drag-and-Drop without browser security warnings
+async function extractDroppedFiles(dataTransfer: DataTransfer): Promise<File[]> {
+  const fileList: File[] = [];
+  const items = dataTransfer.items;
+
+  async function readAllEntries(dirReader: any): Promise<any[]> {
+    const entries: any[] = [];
+    const read = async () => {
+      const batch: any[] = await new Promise((resolve, reject) => dirReader.readEntries(resolve, reject));
+      if (batch.length > 0) {
+        entries.push(...batch);
+        await read();
+      }
+    };
+    await read();
+    return entries;
+  }
+
+  async function traverseEntry(entry: any): Promise<void> {
+    if (!entry) return;
+    if (entry.isFile) {
+      const file = await new Promise<File>((resolve, reject) => entry.file(resolve, reject));
+      fileList.push(file);
+    } else if (entry.isDirectory) {
+      const dirReader = entry.createReader();
+      const entries = await readAllEntries(dirReader);
+      for (const child of entries) {
+        await traverseEntry(child);
       }
     }
+  }
 
-    if (!gltfFile) {
-      console.error("No .gltf or .glb file found in the selected folder.");
-      (e.target as HTMLInputElement).value = "";
-      return;
+  if (items && items.length > 0) {
+    const promises: Promise<void>[] = [];
+    for (let i = 0; i < items.length; i++) {
+      const item = items[i];
+      if (typeof item.webkitGetAsEntry === "function") {
+        const entry = item.webkitGetAsEntry();
+        if (entry) {
+          promises.push(traverseEntry(entry));
+          continue;
+        }
+      }
+      const file = item.getAsFile();
+      if (file) fileList.push(file);
     }
+    await Promise.all(promises);
+  } else if (dataTransfer.files) {
+    for (let i = 0; i < dataTransfer.files.length; i++) {
+      fileList.push(dataTransfer.files[i]);
+    }
+  }
+  return fileList;
+}
 
-    const url = URL.createObjectURL(gltfFile);
-    try {
-      await loader.main([url], fileMap);
-      updateSceneGraph();
-    } catch (error) {
-      console.error("Error loading GLTF:", error);
-    }
-    URL.revokeObjectURL(url);
-    (e.target as HTMLInputElement).value = "";
+viewportContainer.addEventListener("drop", async (e) => {
+  e.preventDefault();
+  viewportContainer.classList.remove("drag-over");
+  if (!e.dataTransfer) return;
+
+  const files = await extractDroppedFiles(e.dataTransfer);
+  if (files && files.length > 0) {
+    await loadModelFromFiles(files);
   }
 });
 
@@ -1274,9 +1401,16 @@ document.addEventListener("contextmenu", (e) => {
   const treeItem = target.closest(".tree-item") as HTMLElement;
   if (treeItem && treeItem.dataset.uuid) {
     e.preventDefault();
-    if (confirm("Delete this object?")) {
-      deleteObjectFromScene(treeItem.dataset.uuid);
-    }
+    const itemUuid = treeItem.dataset.uuid;
+    uiManager.showConfirm({
+      title: "Delete Object",
+      message: "Are you sure you want to delete this object?",
+      confirmText: "Delete",
+      isDanger: true,
+      onConfirm: () => {
+        deleteObjectFromScene(itemUuid);
+      }
+    });
   }
 });
 
@@ -1284,9 +1418,17 @@ document.addEventListener("contextmenu", (e) => {
 document.addEventListener("keydown", (e) => {
   if (e.key === "Delete" && previousSelectedUUID) {
     // Confirm before deleting
-    if (confirm("Delete selected object?")) {
-      deleteObjectFromScene(previousSelectedUUID);
-    }
+    const uuid = previousSelectedUUID;
+    const name = selectedObject?.name || selectedObject?.type || "Selected Object";
+    uiManager.showConfirm({
+      title: "Delete Object",
+      message: `Are you sure you want to delete <strong style="color: var(--text-white);">"${name}"</strong>?`,
+      confirmText: "Delete",
+      isDanger: true,
+      onConfirm: () => {
+        deleteObjectFromScene(uuid);
+      }
+    });
   }
 });
 
@@ -1486,7 +1628,7 @@ document.getElementById("webgl-toggle")?.addEventListener("click", (e) => {
   toggle.classList.toggle("active");
 
   if (toggle.classList.contains("active")) {
-    alert("WebGPU implementation is coming soon! Currently, the engine uses WebGL 1.0 for high-performance rendering.");
+    uiManager.showAlert("WebGPU", "WebGPU implementation is coming soon! Currently, the engine uses WebGL 1.0 for high-performance rendering.");
     // Revert back to WebGL as WebGPU is not yet available
     toggle.classList.remove("active");
   } else {

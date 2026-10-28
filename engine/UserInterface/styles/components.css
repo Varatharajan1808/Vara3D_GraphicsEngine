@@ -350,6 +350,58 @@
     color: var(--text-primary);
 }
 
+.tree-item-actions {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    margin-left: auto;
+    opacity: 0.5;
+    transition: opacity var(--transition-fast);
+}
+
+.tree-item:hover .tree-item-actions {
+    opacity: 1;
+}
+
+.tree-action-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 22px;
+    height: 22px;
+    border-radius: var(--radius-sm);
+    background: transparent;
+    border: none;
+    cursor: pointer;
+    color: var(--text-secondary);
+    padding: 0;
+    transition: color var(--transition-fast), background-color var(--transition-fast), opacity var(--transition-fast);
+}
+
+.tree-action-btn:hover {
+    color: var(--text-primary);
+    background-color: var(--bg-hover);
+}
+
+.tree-action-btn.delete-btn:hover {
+    color: #ef4444;
+    background-color: rgba(239, 68, 68, 0.15);
+}
+
+.tree-action-btn.hidden-state {
+    color: var(--text-muted, #64748b);
+    opacity: 0.5;
+}
+
+.tree-item.hidden-node .tree-item-label {
+    opacity: 0.45;
+    text-decoration: line-through;
+}
+
+.tree-item.hidden-node .tree-item-icon {
+    opacity: 0.4;
+}
+
 .tree-item-children {
     padding-left: 20px;
 }
@@ -455,4 +507,171 @@
     user-select: none;
     pointer-events: none;
     font-family: var(--font-family), system-ui, -apple-system, sans-serif;
+}
+
+/* ========== Custom Modal Dialog ========== */
+.modal-overlay {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: rgba(0, 0, 0, 0.65);
+    backdrop-filter: blur(3px);
+    z-index: var(--z-modal);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    animation: modalFadeIn 0.15s ease-out;
+}
+
+@keyframes modalFadeIn {
+    from {
+        opacity: 0;
+    }
+    to {
+        opacity: 1;
+    }
+}
+
+.modal-dialog {
+    background-color: var(--bg-secondary);
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.6), 0 8px 10px -6px rgba(0, 0, 0, 0.5);
+    width: 360px;
+    max-width: 90vw;
+    overflow: hidden;
+    animation: modalScaleUp 0.15s ease-out;
+}
+
+@keyframes modalScaleUp {
+    from {
+        transform: scale(0.95);
+        opacity: 0;
+    }
+    to {
+        transform: scale(1);
+        opacity: 1;
+    }
+}
+
+.modal-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 14px 16px;
+    border-bottom: 1px solid var(--border-color);
+}
+
+.modal-title-wrap {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.modal-icon {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 24px;
+    height: 24px;
+    border-radius: 50%;
+}
+
+.modal-icon.danger {
+    background: rgba(239, 68, 68, 0.15);
+    color: #ef4444;
+}
+
+.modal-icon.info {
+    background: rgba(14, 99, 156, 0.2);
+    color: #38bdf8;
+}
+
+.modal-title {
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--text-white);
+    margin: 0;
+}
+
+.modal-close-btn {
+    background: transparent;
+    border: none;
+    color: var(--text-secondary);
+    cursor: pointer;
+    padding: 4px;
+    border-radius: var(--radius-sm);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: color var(--transition-fast), background-color var(--transition-fast);
+}
+
+.modal-close-btn:hover {
+    color: var(--text-white);
+    background-color: var(--bg-hover);
+}
+
+.modal-body {
+    padding: 16px;
+    font-size: 13px;
+    line-height: 1.5;
+    color: var(--text-primary);
+}
+
+.modal-footer {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 8px;
+    padding: 12px 16px;
+    background-color: var(--bg-primary);
+    border-top: 1px solid var(--border-color);
+}
+
+.modal-btn {
+    padding: 6px 14px;
+    font-size: 12px;
+    font-weight: 500;
+    border-radius: 4px;
+    cursor: pointer;
+    border: 1px solid transparent;
+    transition: all var(--transition-fast);
+}
+
+.modal-btn-cancel {
+    background-color: var(--bg-tertiary);
+    border-color: var(--border-color);
+    color: var(--text-primary);
+}
+
+.modal-btn-cancel:hover {
+    background-color: var(--bg-hover);
+    color: var(--text-white);
+}
+
+.modal-btn-confirm {
+    background-color: var(--accent-primary);
+    color: #ffffff;
+}
+
+.modal-btn-confirm:hover {
+    background-color: var(--accent-hover);
+}
+
+.modal-btn-danger {
+    background-color: #dc2626;
+    color: #ffffff;
+}
+
+.modal-btn-danger:hover {
+    background-color: #b91c1c;
+}
+
+/* Visual highlight for Viewport Drag and Drop */
+#viewport-container.drag-over {
+  outline: 2px dashed #9381ff !important;
+  outline-offset: -4px !important;
 }

@@ -31,6 +31,8 @@ export class EditorUIController {
     private onTextureSelectCallback?: (type: 'texture' | 'normal', url: string) => void;
     private onGridChangeCallback?: (settings: { visible: boolean; size: number; spacing: number }) => void;
     private onNodeReparentCallback?: (childUuid: string, parentUuid: string | null) => void;
+    private onNodeVisibilityCallback?: (uuid: string, visible: boolean) => void;
+    private onNodeDeleteCallback?: (uuid: string) => void;
 
     // Selected object tracking
     private selectedObjectUUID: string | null = null;
@@ -484,6 +486,156 @@ export class EditorUIController {
         this.onGridChangeCallback = callback;
     }
 
+    public onNodeVisibility(callback: (uuid: string, visible: boolean) => void): void {
+        this.onNodeVisibilityCallback = callback;
+    }
+
+    public onNodeDelete(callback: (uuid: string) => void): void {
+        this.onNodeDeleteCallback = callback;
+    }
+
+    public showConfirm(options: {
+        title?: string;
+        message: string;
+        confirmText?: string;
+        cancelText?: string;
+        isDanger?: boolean;
+        onConfirm: () => void;
+        onCancel?: () => void;
+    }): void {
+        const existingModal = document.getElementById('app-modal-overlay');
+        if (existingModal) existingModal.remove();
+
+        const overlay = document.createElement('div');
+        overlay.id = 'app-modal-overlay';
+        overlay.className = 'modal-overlay';
+
+        const title = options.title || (options.isDanger ? 'Confirm Delete' : 'Confirm Action');
+        const confirmText = options.confirmText || 'Confirm';
+        const cancelText = options.cancelText || 'Cancel';
+        const isDanger = options.isDanger ?? false;
+
+        overlay.innerHTML = `
+            <div class="modal-dialog">
+                <div class="modal-header">
+                    <div class="modal-title-wrap">
+                        <span class="modal-icon ${isDanger ? 'danger' : 'info'}">
+                            ${isDanger
+                                ? `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path><line x1="12" y1="9" x2="12" y2="13"></line><line x1="12" y1="17" x2="12.01" y2="17"></line></svg>`
+                                : `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="16" x2="12" y2="12"></line><line x1="12" y1="8" x2="12.01" y2="8"></line></svg>`
+                            }
+                        </span>
+                        <h3 class="modal-title">${options.title}</h3>
+                    </div>
+                    <button class="modal-close-btn" id="modal-close-btn" title="Close">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+                    </button>
+                </div>
+                <div class="modal-body">${options.message}</div>
+                <div class="modal-footer">
+                    <button class="modal-btn modal-btn-cancel" id="modal-cancel-btn">${cancelText}</button>
+                    <button class="modal-btn ${isDanger ? 'modal-btn-danger' : 'modal-btn-confirm'}" id="modal-confirm-btn">${confirmText}</button>
+                </div>
+            </div>
+        `;
+
+        document.body.appendChild(overlay);
+
+        const close = () => {
+            overlay.remove();
+            document.removeEventListener('keydown', handleKeyDown);
+        };
+
+        const handleKeyDown = (e: KeyboardEvent) => {
+            if (e.key === 'Escape') {
+                close();
+                options.onCancel?.();
+            } else if (e.key === 'Enter') {
+                close();
+                options.onConfirm();
+            }
+        };
+
+        document.addEventListener('keydown', handleKeyDown);
+
+        overlay.addEventListener('click', (e) => {
+            if (e.target === overlay) {
+                close();
+                options.onCancel?.();
+            }
+        });
+
+        document.getElementById('modal-close-btn')?.addEventListener('click', () => {
+            close();
+            options.onCancel?.();
+        });
+
+        document.getElementById('modal-cancel-btn')?.addEventListener('click', () => {
+            close();
+            options.onCancel?.();
+        });
+
+        document.getElementById('modal-confirm-btn')?.addEventListener('click', () => {
+            close();
+            options.onConfirm();
+        });
+
+        document.getElementById('modal-confirm-btn')?.focus();
+    }
+
+    public showAlert(title: string, message?: string): void {
+        const modalTitle = message !== undefined ? title : "Notice";
+        const modalMessage = message !== undefined ? message : title;
+        const existingModal = document.getElementById('app-modal-overlay');
+        if (existingModal) existingModal.remove();
+
+        const overlay = document.createElement('div');
+        overlay.id = 'app-modal-overlay';
+        overlay.className = 'modal-overlay';
+
+        overlay.innerHTML = `
+            <div class="modal-dialog">
+                <div class="modal-header">
+                    <div class="modal-title-wrap">
+                        <span class="modal-icon info">
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="16" x2="12" y2="12"></line><line x1="12" y1="8" x2="12.01" y2="8"></line></svg>
+                        </span>
+                        <h3 class="modal-title">${modalTitle}</h3>
+                    </div>
+                    <button class="modal-close-btn" id="modal-close-btn" title="Close">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+                    </button>
+                </div>
+                <div class="modal-body">${modalMessage}</div>
+                <div class="modal-footer">
+                    <button class="modal-btn modal-btn-confirm" id="modal-confirm-btn">OK</button>
+                </div>
+            </div>
+        `;
+
+        document.body.appendChild(overlay);
+
+        const close = () => {
+            overlay.remove();
+            document.removeEventListener('keydown', handleKeyDown);
+        };
+
+        const handleKeyDown = (e: KeyboardEvent) => {
+            if (e.key === 'Escape' || e.key === 'Enter') {
+                close();
+            }
+        };
+
+        document.addEventListener('keydown', handleKeyDown);
+
+        overlay.addEventListener('click', (e) => {
+            if (e.target === overlay) close();
+        });
+
+        document.getElementById('modal-close-btn')?.addEventListener('click', close);
+        document.getElementById('modal-confirm-btn')?.addEventListener('click', close);
+    }
+
     public onNodeReparent(callback: (childUuid: string, parentUuid: string | null) => void): void {
         this.onNodeReparentCallback = callback;
     }
@@ -648,7 +800,60 @@ export class EditorUIController {
         label.textContent = obj.name || obj.type || 'Object';
 
         content.appendChild(icon);
+        const isVisible = obj.visible !== false;
+        if (!isVisible) {
+            li.classList.add('hidden-node');
+        }
+
         content.appendChild(label);
+
+        // Action buttons (visibility & delete)
+        const isCamera = obj.type === 'Camera';
+        if (!isCamera) {
+            const actions = document.createElement('div');
+            actions.className = 'tree-item-actions';
+
+            // Visibility toggle button
+            const visBtn = document.createElement('button');
+            visBtn.className = `tree-action-btn visibility-btn ${isVisible ? '' : 'hidden-state'}`;
+            visBtn.title = isVisible ? 'Hide Object' : 'Show Object';
+            visBtn.innerHTML = isVisible
+                ? `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path><circle cx="12" cy="12" r="3"></circle></svg>`
+                : `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"></path><line x1="1" y1="1" x2="23" y2="23"></line></svg>`;
+
+            visBtn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                if (this.onNodeVisibilityCallback) {
+                    this.onNodeVisibilityCallback(obj.uuid, !isVisible);
+                }
+            });
+
+            // Delete button
+            const delBtn = document.createElement('button');
+            delBtn.className = 'tree-action-btn delete-btn';
+            delBtn.title = 'Delete Object';
+            delBtn.innerHTML = `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path><line x1="10" y1="11" x2="10" y2="17"></line><line x1="14" y1="11" x2="14" y2="17"></line></svg>`;
+
+            delBtn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                const nodeName = obj.name || obj.type || 'Object';
+                this.showConfirm({
+                    title: 'Delete Object',
+                    message: `Are you sure you want to delete <strong style="color: var(--text-white);">"${nodeName}"</strong>? This action cannot be undone.`,
+                    confirmText: 'Delete',
+                    isDanger: true,
+                    onConfirm: () => {
+                        if (this.onNodeDeleteCallback) {
+                            this.onNodeDeleteCallback(obj.uuid);
+                        }
+                    }
+                });
+            });
+
+            actions.appendChild(visBtn);
+            actions.appendChild(delBtn);
+            content.appendChild(actions);
+        }
         li.appendChild(content);
 
         // Add click handler for selection

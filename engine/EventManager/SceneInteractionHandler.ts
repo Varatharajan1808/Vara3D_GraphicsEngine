@@ -801,7 +801,7 @@ export class SceneInteractionHandler {
     let closestObject: RenderableMeshObject | null = null;
     let minDistance = Infinity;
     for (const object of this.scene.objects) {
-      if (object.type === "Grid-Geometry" || !object.boundingBox) continue;
+      if (object.type === "Grid-Geometry" || !object.boundingBox || object.visible === false) continue;
       const t = this.intersectRayWithBoundingBox(
         this.rayOrigin,
         this.rayDirection.slice(0, 3) as Vec3,
