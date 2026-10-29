@@ -675,3 +675,22 @@
   outline: 2px dashed #9381ff !important;
   outline-offset: -4px !important;
 }
+
+/* Marquee Selection Box Overlay */
+.marquee-box {
+  position: absolute;
+  pointer-events: none;
+  border: 1.5px dashed #a78bfa;
+  background: rgba(167, 139, 250, 0.15);
+  box-shadow: 0 0 8px rgba(167, 139, 250, 0.25);
+  z-index: 100;
+  display: none;
+  border-radius: 2px;
+}
+
+/* Disabled menu items */
+.dropdown-item.disabled {
+  opacity: 0.4 !important;
+  pointer-events: none !important;
+  cursor: default !important;
+}

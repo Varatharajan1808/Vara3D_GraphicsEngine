@@ -1,3 +1,10 @@
+export interface ObjectTransformSnapshot {
+  uuid: string;
+  position: { x: number; y: number; z: number };
+  rotate: { x: number; y: number; z: number };
+  scale: { x: number; y: number; z: number };
+}
+
 import { mat4, vec3, vec4 } from "../MathLibrary/gl-matrix.js";
 import { CameraController } from "../CameraSystem/CameraController";
 import { TransformGizmoController } from "../CoreUtilities/TransformGizmoController";
@@ -89,7 +96,19 @@ export class SceneInteractionHandler {
   originalVertexPositions: number[] = [];
   isDirectDragging: boolean = false;
   onSelect?: (uuid: string | null) => void;
+  onMultiSelect?: (uuids: string[]) => void;
   onDelete?: (uuid: string) => void;
+  onDeleteNodes?: (nodes: RenderableMeshObject[]) => void;
+  onTransformComplete?: (
+    startStates: ObjectTransformSnapshot[],
+    endStates: ObjectTransformSnapshot[]
+  ) => void;
+  transformStartSnapshots: ObjectTransformSnapshot[] = [];
+  isMarqueeMode: boolean = false;
+  isMarqueeSelecting: boolean = false;
+  marqueeStart: { x: number; y: number } = { x: 0, y: 0 };
+  marqueeBoxEl: HTMLElement | null = null;
+  originalMultiPositions: Map<string, { x: number; y: number; z: number }> = new Map();
   onAddObject?: (type: string, subtype: string) => void;
   onOpenAddMenu?: () => void;
   onOpenFileMenu?: () => void;
@@ -128,6 +147,14 @@ export class SceneInteractionHandler {
     this.isRotationMode = false;
     this.isScaleMode = false;
     this.gizmo.visible = false;
+    this.marqueeBoxEl = document.getElementById("marquee-selection-box");
+    if (!this.marqueeBoxEl && this.canvas.parentElement) {
+      this.marqueeBoxEl = document.createElement("div");
+      this.marqueeBoxEl.id = "marquee-selection-box";
+      this.marqueeBoxEl.className = "marquee-box";
+      this.marqueeBoxEl.style.display = "none";
+      this.canvas.parentElement.appendChild(this.marqueeBoxEl);
+    }
     this.isGizmoInteraction = false;
     this.isTransformationActive = false;
     this.rayDirection = [0, 0, 0];
@@ -214,17 +241,31 @@ export class SceneInteractionHandler {
           break;
         case "delete":
         case "backspace":
-          if (this.selectedObject) {
-            // Prevent deleting grid or other system objects if necessary
-            if (this.selectedObject.type === "Grid-Geometry") return;
-
-            const uuid = this.selectedObject.uuid;
-            this.scene.remove(this.selectedObject);
-
-            if (this.onDelete && uuid) {
-              this.onDelete(uuid);
+          if (this.onDeleteNodes) {
+            const toDelete = this.select.length > 0 ? [...this.select] : (this.selectedObject ? [this.selectedObject] : []);
+            const valid = toDelete.filter(o => o.type !== "Grid-Geometry");
+            if (valid.length > 0) {
+              this.onDeleteNodes(valid);
             }
-
+          } else if (this.select && this.select.length > 0) {
+            const toDelete = [...this.select];
+            for (const obj of toDelete) {
+              if (obj.type === "Grid-Geometry") continue;
+              const uuid = obj.uuid;
+              this.scene.remove(obj);
+              if (this.onDelete && uuid) {
+                this.onDelete(uuid);
+              }
+            }
+            this.deselectObject();
+          } else if (this.selectedObject) {
+            if (this.selectedObject.type !== "Grid-Geometry") {
+              const uuid = this.selectedObject.uuid;
+              this.scene.remove(this.selectedObject);
+              if (this.onDelete && uuid) {
+                this.onDelete(uuid);
+              }
+            }
             this.deselectObject();
           }
           break;
@@ -270,6 +311,23 @@ export class SceneInteractionHandler {
           this.activeAxis = clickedObject.axis as Axis;
           this.isObjectSelected = true;
           this.isGizmoInteraction = true;
+
+          // Capture start transform snapshots for undo/redo
+          const targetObjects = this.select.length > 0 ? this.select : (this.selectedObject ? [this.selectedObject] : []);
+          this.transformStartSnapshots = targetObjects.map((obj) => ({
+            uuid: obj.uuid,
+            position: { x: obj.position.x, y: obj.position.y, z: obj.position.z },
+            rotate: { x: obj.rotate.x, y: obj.rotate.y, z: obj.rotate.z },
+            scale: { x: obj.scale.x, y: obj.scale.y, z: obj.scale.z },
+          }));
+          this.originalMultiPositions = new Map();
+          for (const obj of this.select) {
+            this.originalMultiPositions.set(obj.uuid, {
+              x: obj.position.x,
+              y: obj.position.y,
+              z: obj.position.z,
+            });
+          };
           this.isRotationMode =
             clickedObject.geometry?.type?.includes("Ring") || false;
           this.isScaleMode =
@@ -428,6 +486,28 @@ export class SceneInteractionHandler {
             return;
           }
 
+          // Ctrl / Shift click object selection toggle or single select
+          if (event.ctrlKey || event.shiftKey || event.metaKey) {
+            const existingIdx = this.select.findIndex((o) => o.uuid === clickedObject.uuid);
+            if (existingIdx >= 0) {
+              this.select.splice(existingIdx, 1);
+            } else {
+              this.select.push(clickedObject);
+            }
+            if (this.select.length > 0) {
+              this.isObjectSelected = true;
+              this.selectedObject = this.select[this.select.length - 1];
+              this.webgl.selectedObject = this.selectedObject;
+              this.updateGizmoPositionForMultiSelection();
+              if (this.onMultiSelect) {
+                this.onMultiSelect(this.select.map((o) => o.uuid));
+              }
+            } else {
+              this.deselectObject();
+            }
+            return;
+          }
+
           // Default object selection logic
           this.isObjectSelected = true;
           this.selectedObject = clickedObject;
@@ -482,8 +562,10 @@ export class SceneInteractionHandler {
           return;
         }
       } else {
-        // Clicked on empty space - clear selections and highlights
-        this.deselectObject();
+        // Clicked on empty space - clear selections unless Ctrl/Shift/Marquee active
+        if (!event.ctrlKey && !event.shiftKey && !event.metaKey && !this.isMarqueeMode) {
+          this.deselectObject();
+        }
       }
     });
 
@@ -572,8 +654,25 @@ export class SceneInteractionHandler {
       this.dragStartPosition = { x: e.clientX, y: e.clientY };
       this.activeButton = e.button;
       this.hasDragged = false;
+
+      // Check if marquee selection should start (Ctrl, Shift, or Marquee mode)
+      if (e.button === 0 && (e.ctrlKey || e.metaKey)) {
+        const selectObject = this.performRaycasting();
+        const clicked = selectObject?.[0];
+        if (!clicked || !clicked.isGizmoPart) {
+          this.isMarqueeSelecting = true;
+          this.marqueeStart = { x: e.clientX, y: e.clientY };
+          this.updateMarqueeVisual(e.clientX, e.clientY);
+          return;
+        }
+      }
     });
     this.canvas.addEventListener("pointermove", (e: PointerEvent) => {
+      if (this.isMarqueeSelecting) {
+        e.preventDefault();
+        this.updateMarqueeVisual(e.clientX, e.clientY);
+        return;
+      }
       if (!this.move || this.isPressed) return;
 
       // Set hasDragged flag
@@ -666,7 +765,59 @@ export class SceneInteractionHandler {
         this.camera.OrbitCamera();
       }
     });
-    this.canvas.addEventListener("pointerup", () => {
+    this.canvas.addEventListener("pointerup", (e: PointerEvent) => {
+      if (this.isMarqueeSelecting) {
+        this.isMarqueeSelecting = false;
+        if (this.marqueeBoxEl) {
+          this.marqueeBoxEl.style.display = "none";
+        }
+
+        const canvasRect = this.canvas.getBoundingClientRect();
+        const minX = Math.min(this.marqueeStart.x, e.clientX) - canvasRect.left;
+        const maxX = Math.max(this.marqueeStart.x, e.clientX) - canvasRect.left;
+        const minY = Math.min(this.marqueeStart.y, e.clientY) - canvasRect.top;
+        const maxY = Math.max(this.marqueeStart.y, e.clientY) - canvasRect.top;
+
+        if (maxX - minX > 4 || maxY - minY > 4) {
+          const isAdd = e.ctrlKey || e.metaKey;
+          this.performMarqueeSelection(minX, maxX, minY, maxY, isAdd);
+        }
+      }
+      if (this.isGizmoInteraction && this.transformStartSnapshots.length > 0) {
+        const targetObjects = this.select.length > 0 ? this.select : (this.selectedObject ? [this.selectedObject] : []);
+        const endSnapshots: ObjectTransformSnapshot[] = targetObjects.map((obj) => ({
+          uuid: obj.uuid,
+          position: { x: obj.position.x, y: obj.position.y, z: obj.position.z },
+          rotate: { x: obj.rotate.x, y: obj.rotate.y, z: obj.rotate.z },
+          scale: { x: obj.scale.x, y: obj.scale.y, z: obj.scale.z },
+        }));
+
+        let hasMoved = false;
+        for (let i = 0; i < this.transformStartSnapshots.length; i++) {
+          const s = this.transformStartSnapshots[i];
+          const e = endSnapshots[i];
+          if (!s || !e) continue;
+          if (
+            Math.abs(s.position.x - e.position.x) > 0.0001 ||
+            Math.abs(s.position.y - e.position.y) > 0.0001 ||
+            Math.abs(s.position.z - e.position.z) > 0.0001 ||
+            Math.abs(s.rotate.x - e.rotate.x) > 0.0001 ||
+            Math.abs(s.rotate.y - e.rotate.y) > 0.0001 ||
+            Math.abs(s.rotate.z - e.rotate.z) > 0.0001 ||
+            Math.abs(s.scale.x - e.scale.x) > 0.0001 ||
+            Math.abs(s.scale.y - e.scale.y) > 0.0001 ||
+            Math.abs(s.scale.z - e.scale.z) > 0.0001
+          ) {
+            hasMoved = true;
+            break;
+          }
+        }
+
+        if (hasMoved && this.onTransformComplete) {
+          this.onTransformComplete(this.transformStartSnapshots, endSnapshots);
+        }
+        this.transformStartSnapshots = [];
+      }
       this.move = false;
       this.isGizmoInteraction = false;
       this.isTransformationActive = false;
@@ -1567,6 +1718,31 @@ export class SceneInteractionHandler {
       return;
     }
 
+    if (this.select && this.select.length > 1) {
+      for (const obj of this.select) {
+        const orig = this.originalMultiPositions.get(obj.uuid);
+        if (orig) {
+          obj.position.x = orig.x + moveX;
+          obj.position.y = orig.y + moveY;
+          obj.position.z = orig.z + moveZ;
+          obj.updateTranslate();
+        }
+      }
+      if (this.gizmo) {
+        let avgX = 0, avgY = 0, avgZ = 0;
+        for (const obj of this.select) {
+          avgX += obj.position.x;
+          avgY += obj.position.y;
+          avgZ += obj.position.z;
+        }
+        this.gizmo.position.x = avgX / this.select.length;
+        this.gizmo.position.y = avgY / this.select.length;
+        this.gizmo.position.z = avgZ / this.select.length;
+        this.gizmo.updateLocalMatrix();
+      }
+      return;
+    }
+
     this.selectedObject.position.x = this.originalObjectPosition.x + moveX;
     this.selectedObject.position.y = this.originalObjectPosition.y + moveY;
     this.selectedObject.position.z = this.originalObjectPosition.z + moveZ;
@@ -1931,4 +2107,194 @@ export class SceneInteractionHandler {
     this.recalculateNormals(this.selectedObject);
     this.selectedObject.updateBoundingBox();
   }
+
+  updateGizmoPositionForMultiSelection(): void {
+    if (!this.gizmo) return;
+    if (this.select.length === 0) {
+      this.gizmo.visible = false;
+      return;
+    }
+    let avgX = 0, avgY = 0, avgZ = 0;
+    for (const obj of this.select) {
+      avgX += obj.position.x;
+      avgY += obj.position.y;
+      avgZ += obj.position.z;
+    }
+    this.gizmo.position.x = avgX / this.select.length;
+    this.gizmo.position.y = avgY / this.select.length;
+    this.gizmo.position.z = avgZ / this.select.length;
+    this.gizmo.updateLocalMatrix();
+    this.gizmo.visible = true;
+    if (!this.gizmo.gizmoMeshes.length) {
+      this.gizmo.addToScene(this.scene);
+    }
+  }
+
+  private updateMarqueeVisual(currentX: number, currentY: number): void {
+    if (!this.marqueeBoxEl) {
+      this.marqueeBoxEl = document.getElementById("marquee-selection-box");
+      if (!this.marqueeBoxEl) return;
+    }
+    const parentRect =
+      this.canvas.parentElement?.getBoundingClientRect() ||
+      this.canvas.getBoundingClientRect();
+
+    const x1 = Math.min(this.marqueeStart.x, currentX) - parentRect.left;
+    const y1 = Math.min(this.marqueeStart.y, currentY) - parentRect.top;
+    const w = Math.abs(currentX - this.marqueeStart.x);
+    const h = Math.abs(currentY - this.marqueeStart.y);
+
+    this.marqueeBoxEl.style.left = `${x1}px`;
+    this.marqueeBoxEl.style.top = `${y1}px`;
+    this.marqueeBoxEl.style.width = `${w}px`;
+    this.marqueeBoxEl.style.height = `${h}px`;
+    this.marqueeBoxEl.style.display = "block";
+  }
+
+  performMarqueeSelection(
+    minX: number,
+    maxX: number,
+    minY: number,
+    maxY: number,
+    addToSelection: boolean = false
+  ): void {
+    const canvasWidth = this.canvas.clientWidth;
+    const canvasHeight = this.canvas.clientHeight;
+
+    const vp = mat4.create();
+    mat4.multiply(vp, this.camera.projectionMatrix, this.camera.viewMatrix);
+
+    const newlySelected: RenderableMeshObject[] = [];
+
+    // Project each scene object to 2D screen space
+    for (const obj of this.scene.objects) {
+      // Exclude gizmo, grid, and invisible objects
+      if (
+        obj.isGizmoPart ||
+        obj.type === "Grid-Geometry" ||
+        (obj as any).visible === false
+      ) {
+        continue;
+      }
+
+      let isInside = false;
+
+      // 1. Center projection test
+      let worldCenter: [number, number, number] = [
+        obj.position.x,
+        obj.position.y,
+        obj.position.z,
+      ];
+      if (obj.boundingBox) {
+        const bMin = obj.boundingBox.min;
+        const bMax = obj.boundingBox.max;
+        worldCenter = [
+          (bMin[0] + bMax[0]) * 0.5,
+          (bMin[1] + bMax[1]) * 0.5,
+          (bMin[2] + bMax[2]) * 0.5,
+        ];
+      }
+
+      const cp = vec4.fromValues(worldCenter[0], worldCenter[1], worldCenter[2], 1.0);
+      vec4.transformMat4(cp, cp, vp);
+
+      if (cp[3] > 0.001) {
+        const cScreenX = ((cp[0] / cp[3]) * 0.5 + 0.5) * canvasWidth;
+        const cScreenY = (-(cp[1] / cp[3]) * 0.5 + 0.5) * canvasHeight;
+
+        if (
+          cScreenX >= minX &&
+          cScreenX <= maxX &&
+          cScreenY >= minY &&
+          cScreenY <= maxY
+        ) {
+          isInside = true;
+        }
+      }
+
+      // 2. Bounding Box Corners test (if mesh has boundingBox)
+      if (!isInside && obj.boundingBox) {
+        const bMin = obj.boundingBox.min;
+        const bMax = obj.boundingBox.max;
+        const corners = [
+          [bMin[0], bMin[1], bMin[2]],
+          [bMax[0], bMin[1], bMin[2]],
+          [bMin[0], bMax[1], bMin[2]],
+          [bMax[0], bMax[1], bMin[2]],
+          [bMin[0], bMin[1], bMax[2]],
+          [bMax[0], bMin[1], bMax[2]],
+          [bMin[0], bMax[1], bMax[2]],
+          [bMax[0], bMax[1], bMax[2]],
+        ];
+
+        let screenMinX = Infinity;
+        let screenMaxX = -Infinity;
+        let screenMinY = Infinity;
+        let screenMaxY = -Infinity;
+        let hasVisibleCorner = false;
+
+        for (const corner of corners) {
+          const p = vec4.fromValues(corner[0], corner[1], corner[2], 1.0);
+          vec4.transformMat4(p, p, vp);
+
+          if (p[3] > 0.001) {
+            const sx = ((p[0] / p[3]) * 0.5 + 0.5) * canvasWidth;
+            const sy = (-(p[1] / p[3]) * 0.5 + 0.5) * canvasHeight;
+            screenMinX = Math.min(screenMinX, sx);
+            screenMaxX = Math.max(screenMaxX, sx);
+            screenMinY = Math.min(screenMinY, sy);
+            screenMaxY = Math.max(screenMaxY, sy);
+            hasVisibleCorner = true;
+          }
+        }
+
+        if (hasVisibleCorner) {
+          const overlapX =
+            Math.max(0, Math.min(screenMaxX, maxX) - Math.max(screenMinX, minX));
+          const overlapY =
+            Math.max(0, Math.min(screenMaxY, maxY) - Math.max(screenMinY, minY));
+
+          if (overlapX > 0 && overlapY > 0) {
+            isInside = true;
+          }
+        }
+      }
+
+      if (isInside) {
+        newlySelected.push(obj);
+      }
+    }
+
+    // Apply selection
+    let finalSelection: RenderableMeshObject[] = [];
+    if (addToSelection) {
+      const existingUuids = new Set(this.select.map((s) => s.uuid));
+      finalSelection = [...this.select];
+      for (const obj of newlySelected) {
+        if (!existingUuids.has(obj.uuid)) {
+          finalSelection.push(obj);
+        }
+      }
+    } else {
+      finalSelection = newlySelected;
+    }
+
+    if (finalSelection.length > 0) {
+      this.isObjectSelected = true;
+      this.select = finalSelection;
+      this.selectedObject = finalSelection[0];
+      this.webgl.selectedObject = finalSelection[0];
+      this.updateGizmoPositionForMultiSelection();
+
+      const uuids = finalSelection.map((o) => o.uuid);
+      if (this.onMultiSelect) {
+        this.onMultiSelect(uuids);
+      } else if (this.onSelect) {
+        this.onSelect(this.selectedObject.uuid || null);
+      }
+    } else {
+      this.deselectObject();
+    }
+  }
+
 }

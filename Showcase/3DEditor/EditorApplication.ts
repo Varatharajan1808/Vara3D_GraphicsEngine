@@ -1,3 +1,5 @@
+import { CommandHistory, Command } from "../../engine/CoreUtilities/CommandHistory";
+import { ObjectTransformSnapshot } from "../../engine/EventManager/SceneInteractionHandler";
 import { ZipArchiveLoader } from "../../engine/CoreUtilities/ZipArchiveLoader";
 import { EditorUIController } from "../../engine/UserInterface/EditorUIController";
 import { ViewHelper } from "../../engine/UserInterface/ViewHelper";
@@ -166,10 +168,184 @@ events.onDelete = (uuid) => {
 };
 
 // Track previous selection to detect changes
-let previousSelectedUUID: string | null = null;
-
 // Initialize UI Manager
 const uiManager = new EditorUIController();
+
+// ============================================================================
+// Core Undo / Redo System & Helper Functions
+// ============================================================================
+let previousSelectionSignature: string = "";
+let previousSelectedUUID: string | null = null;
+const commandHistory = new CommandHistory(50);
+commandHistory.onChange((canUndo, canRedo, undoName, redoName) => {
+  uiManager.updateUndoRedoUI(canUndo, canRedo, undoName, redoName);
+});
+uiManager.onUndo(() => commandHistory.undo());
+uiManager.onRedo(() => commandHistory.redo());
+
+// Universal helper to find an object by UUID in meshes, nodes, lights, or camera
+function findObjectByUUID(uuid: string): any {
+  if (!uuid) return null;
+  if (camera && camera.uuid === uuid) return camera;
+
+  const findInNodes = (nodes: SceneNode[]): SceneNode | null => {
+    for (const node of nodes) {
+      if (node.uuid === uuid) return node;
+      const found = findInNodes(node.children);
+      if (found) return found;
+    }
+    return null;
+  };
+
+  const foundNode = findInNodes(scene.nodes);
+  if (foundNode) return foundNode;
+
+  for (const obj of scene.objects) {
+    if (obj.uuid === uuid) return obj;
+  }
+  for (const light of scene.lights) {
+    if (light.uuid === uuid) return light;
+  }
+  return null;
+}
+
+function selectSingleObject(obj: any) {
+  selectedObject = obj;
+  previousSelectedUUID = obj.uuid;
+  previousSelectionSignature = obj.uuid;
+  updateObjectProperties(obj);
+  if (obj instanceof RenderableMeshObject) {
+    events.selectedObject = obj;
+    events.isObjectSelected = true;
+    events.select = [obj];
+    if (events.webgl) events.webgl.selectedObject = obj;
+    if (events.gizmo) {
+      events.gizmo.visible = true;
+      events.updateGizmoPosition(obj);
+      if (!events.gizmo.gizmoMeshes.length) {
+        events.gizmo.addToScene(scene);
+      }
+    }
+  } else {
+    events.selectedObject = null;
+    events.isObjectSelected = false;
+    events.select = [];
+    if (events.gizmo) {
+      events.gizmo.visible = false;
+    }
+  }
+  uiManager.selectObject(obj.uuid);
+}
+
+function deselectInEditor() {
+  selectedObject = null;
+  previousSelectedUUID = null;
+  previousSelectionSignature = "";
+  events.deselectObject();
+  clearObjectProperties();
+  uiManager.selectObject(null);
+}
+
+function applyObjectTransforms(snapshots: ObjectTransformSnapshot[]) {
+  for (const s of snapshots) {
+    const obj = findObjectByUUID(s.uuid);
+    if (obj) {
+      obj.position.x = s.position.x;
+      obj.position.y = s.position.y;
+      obj.position.z = s.position.z;
+      obj.rotate.x = s.rotate.x;
+      obj.rotate.y = s.rotate.y;
+      obj.rotate.z = s.rotate.z;
+      obj.scale.x = s.scale.x;
+      obj.scale.y = s.scale.y;
+      obj.scale.z = s.scale.z;
+      if (obj instanceof RenderableMeshObject) {
+        obj.updateTranslate();
+        obj.ObjectRotation();
+        obj.updateScale();
+        if (obj.updateBoundingBox) obj.updateBoundingBox();
+      } else if (obj instanceof SceneNode) {
+        obj.updateLocalMatrix();
+      }
+    }
+  }
+
+  // Update gizmo and properties panel
+  if (events.select.length > 1) {
+    events.updateGizmoPositionForMultiSelection();
+  } else if (events.selectedObject) {
+    events.updateGizmoPosition(events.selectedObject);
+  }
+  if (selectedObject) {
+    updateObjectProperties(selectedObject);
+  }
+}
+
+// Handle interactive gizmo transform complete (Undo/Redo)
+events.onTransformComplete = (startStates, endStates) => {
+  commandHistory.execute({
+    name: "Transform",
+    execute: () => {
+      applyObjectTransforms(endStates);
+    },
+    undo: () => {
+      applyObjectTransforms(startStates);
+    }
+  }, false);
+};
+
+function executeDeleteObjects(nodes: SceneNode[]) {
+  if (!nodes || nodes.length === 0) return;
+
+  const records = nodes.map((node) => ({
+    node,
+    parent: node.parent || null
+  }));
+
+  commandHistory.execute({
+    name: nodes.length > 1 ? `Delete ${nodes.length} Objects` : `Delete ${nodes[0]?.name || "Object"}`,
+    execute: () => {
+      for (const rec of records) {
+        scene.remove(rec.node);
+        createdObjects.delete(rec.node.uuid);
+        if (lightInstances.has(rec.node.uuid)) {
+          lightInstances.delete(rec.node.uuid);
+        }
+      }
+      deselectInEditor();
+      updateSceneGraph();
+    },
+    undo: () => {
+      for (const rec of records) {
+        scene.add(rec.node);
+        if (rec.parent) {
+          rec.node.setParent(rec.parent);
+        }
+        if (rec.node instanceof RenderableMeshObject) {
+          createdObjects.set(rec.node.uuid, rec.node);
+        }
+      }
+      if (records.length === 1) {
+        selectSingleObject(records[0].node);
+      } else {
+        const meshes = records.map((r) => r.node).filter((n) => n instanceof RenderableMeshObject) as RenderableMeshObject[];
+        if (meshes.length > 0) {
+          events.select = meshes;
+          events.selectedObject = meshes[0];
+          events.isObjectSelected = true;
+          events.updateGizmoPositionForMultiSelection();
+          if (events.gizmo) events.gizmo.visible = true;
+          uiManager.selectObjects(meshes.map((m) => m.uuid));
+        }
+      }
+      updateSceneGraph();
+    }
+  }, true);
+}
+
+events.onDeleteNodes = (nodes) => {
+  executeDeleteObjects(nodes);
+};
 
 // Handle Grid changes
 uiManager.onGridChange((settings) => {
@@ -277,17 +453,11 @@ uiManager.onNodeReparent((childUuid, parentUuid) => {
 
 // Handle node visibility toggle from scene graph
 uiManager.onNodeVisibility((uuid: string, visible: boolean) => {
-  const findNode = (nodes: SceneNode[], targetUuid: string): SceneNode | null => {
-    for (const node of nodes) {
-      if (node.uuid === targetUuid) return node;
-      const found = findNode(node.children, targetUuid);
-      if (found) return found;
-    }
-    return null;
-  };
-
-  const targetNode = findNode(scene.nodes, uuid);
+  const targetNode = findObjectByUUID(uuid);
   if (!targetNode) return;
+
+  const oldVisible = (targetNode as any).visible !== false;
+  if (oldVisible === visible) return;
 
   const setVisibilityRecursive = (node: SceneNode, v: boolean) => {
     (node as any).visible = v;
@@ -295,15 +465,21 @@ uiManager.onNodeVisibility((uuid: string, visible: boolean) => {
       setVisibilityRecursive(child, v);
     }
   };
-  setVisibilityRecursive(targetNode, visible);
 
-  if (selectedObject === targetNode && !visible) {
-    if (events.gizmo) {
-      events.gizmo.visible = false;
+  commandHistory.execute({
+    name: `${visible ? "Show" : "Hide"} ${targetNode.name || targetNode.type || "Object"}`,
+    execute: () => {
+      setVisibilityRecursive(targetNode, visible);
+      if (selectedObject === targetNode && !visible) {
+        if (events.gizmo) events.gizmo.visible = false;
+      }
+      updateSceneGraph();
+    },
+    undo: () => {
+      setVisibilityRecursive(targetNode, oldVisible);
+      updateSceneGraph();
     }
-  }
-
-  updateSceneGraph();
+  }, true);
 });
 
 // Handle node deletion from scene graph
@@ -916,6 +1092,24 @@ function handleAddObject(type: string, subtype: string) {
     if (events.webgl) {
       events.webgl.selectedObject = mesh;
     }
+
+    commandHistory.execute({
+      name: `Add ${subtype}`,
+      execute: () => {
+        scene.add(mesh);
+        createdObjects.set(mesh.uuid, mesh);
+        selectSingleObject(mesh);
+        updateSceneGraph();
+      },
+      undo: () => {
+        scene.remove(mesh);
+        createdObjects.delete(mesh.uuid);
+        if (selectedObject === mesh || events.select.some((o: any) => o.uuid === mesh.uuid)) {
+          deselectInEditor();
+        }
+        updateSceneGraph();
+      }
+    }, false);
   } else if (type === "light") {
     // Add new light based on subtype as a SceneNode
     let newLight: LightNode | null = null;
@@ -953,6 +1147,23 @@ function handleAddObject(type: string, subtype: string) {
       previousSelectedUUID = newLight.uuid;
       updateObjectProperties(newLight);
       uiManager.selectObject(newLight.uuid);
+
+      const addedLight = newLight;
+      commandHistory.execute({
+        name: `Add ${subtype} Light`,
+        execute: () => {
+          scene.add(addedLight);
+          selectSingleObject(addedLight);
+          updateSceneGraph();
+        },
+        undo: () => {
+          scene.remove(addedLight);
+          if (selectedObject === addedLight) {
+            deselectInEditor();
+          }
+          updateSceneGraph();
+        }
+      }, false);
     }
 
     gl.useProgram(program);
@@ -1336,63 +1547,9 @@ document.getElementById("normal-file-input")?.addEventListener("change", async (
 
 // Handle delete from scene graph
 function deleteObjectFromScene(uuid: string) {
-  const findNodeInScene = (nodes: SceneNode[], targetUuid: string): SceneNode | null => {
-    for (const node of nodes) {
-      if (node.uuid === targetUuid) return node;
-      const found = findNodeInScene(node.children, targetUuid);
-      if (found) return found;
-    }
-    return null;
-  };
-
-  const targetNode = findNodeInScene(scene.nodes, uuid);
+  const targetNode = findObjectByUUID(uuid);
   if (!targetNode) return;
-
-  // Helper to recursively collect all descendant nodes
-  const collectDescendants = (node: SceneNode, collected: SceneNode[]) => {
-    collected.push(node);
-    for (const child of node.children) {
-      collectDescendants(child, collected);
-    }
-  };
-
-  const nodesToRemove: SceneNode[] = [];
-  collectDescendants(targetNode, nodesToRemove);
-
-  // Perform removal for each node in the hierarchy
-  for (const node of nodesToRemove) {
-    // Remove from SceneHierarchyManager
-    scene.remove(node);
-
-    // Remove from internal EditorApplication maps
-    createdObjects.delete(node.uuid);
-    if (lightInstances.has(node.uuid)) {
-      lightInstances.delete(node.uuid);
-    }
-
-    // Deselect if it was selected
-    if (selectedObject === node) {
-      selectedObject = null;
-      previousSelectedUUID = null;
-
-      // Clear viewport selection if it was a mesh
-      if (node instanceof RenderableMeshObject) {
-        events.selectedObject = null;
-        events.isObjectSelected = false;
-        events.select = [];
-        if (events.gizmo) {
-          events.gizmo.visible = false;
-          events.gizmo.removeFromScene(scene);
-        }
-      }
-
-      // Clear UI properties panel
-      clearObjectProperties();
-    }
-  }
-
-  // Final UI update
-  updateSceneGraph();
+  executeDeleteObjects([targetNode]);
 }
 
 // Add delete functionality to scene graph items
@@ -1716,3 +1873,33 @@ updateSceneGraph();
 
 // Start render loop
 animate();
+
+// Global Keyboard Shortcuts for Undo / Redo (Ctrl+Z, Ctrl+Y, Ctrl+Shift+Z)
+window.addEventListener("keydown", (e: KeyboardEvent) => {
+  if (
+    e.target instanceof HTMLInputElement ||
+    e.target instanceof HTMLTextAreaElement ||
+    (e.target as HTMLElement)?.isContentEditable
+  ) {
+    return;
+  }
+
+  // Undo: Ctrl+Z or Cmd+Z (without Shift)
+  if ((e.ctrlKey || e.metaKey) && !e.shiftKey && (e.key === "z" || e.key === "Z")) {
+    e.preventDefault();
+    e.stopPropagation();
+    commandHistory.undo();
+    return;
+  }
+
+  // Redo: Ctrl+Y or Cmd+Y, or Ctrl+Shift+Z / Cmd+Shift+Z
+  if (
+    ((e.ctrlKey || e.metaKey) && (e.key === "y" || e.key === "Y")) ||
+    ((e.ctrlKey || e.metaKey) && e.shiftKey && (e.key === "z" || e.key === "Z"))
+  ) {
+    e.preventDefault();
+    e.stopPropagation();
+    commandHistory.redo();
+    return;
+  }
+});

@@ -7,6 +7,8 @@ export class EditorUIController {
     // Dropdown menus
     private fileMenuBtn!: HTMLElement;
     private fileMenu!: HTMLElement;
+    private onUndoCallback?: () => void;
+    private onRedoCallback?: () => void;
     private addMenuBtn!: HTMLElement;
     private addMenu!: HTMLElement;
     private viewMenuBtn!: HTMLElement;
@@ -36,6 +38,7 @@ export class EditorUIController {
 
     // Selected object tracking
     private selectedObjectUUID: string | null = null;
+    private selectedObjectUUIDs: Set<string> = new Set();
     private collapsedNodes: Set<string> = new Set();
 
     constructor() {
@@ -641,8 +644,16 @@ export class EditorUIController {
     }
 
     public updateObjectProperties(object: any): void {
+        if (!object) {
+            this.selectedObjectUUID = null;
+            this.selectedObjectUUIDs.clear();
+            return;
+        }
         // Update selected UUID
         this.selectedObjectUUID = object.uuid;
+        if (!this.selectedObjectUUIDs.has(object.uuid)) {
+            this.selectedObjectUUIDs.add(object.uuid);
+        }
 
         // Show/hide panels based on object type
         this.updatePanelVisibility(object.type);
@@ -787,8 +798,8 @@ export class EditorUIController {
         }
         content.appendChild(toggle);
 
-        // Highlight if selected
-        if (obj.uuid === this.selectedObjectUUID) {
+        // Highlight if selected (supports multi-selection)
+        if (this.selectedObjectUUIDs.has(obj.uuid) || obj.uuid === this.selectedObjectUUID) {
             li.classList.add('selected');
         }
 
@@ -926,13 +937,29 @@ export class EditorUIController {
         }
     }
 
-    public selectObject(uuid: string): void {
+    public selectObjects(uuids: string[]): void {
+        this.selectedObjectUUIDs = new Set(uuids);
+        this.selectedObjectUUID = uuids.length > 0 ? uuids[0] : null;
+
+        const allItems = document.querySelectorAll('.tree-item');
+        allItems.forEach(item => {
+            const itemUuid = (item as HTMLElement).dataset.uuid;
+            if (itemUuid && this.selectedObjectUUIDs.has(itemUuid)) {
+                item.classList.add('selected');
+            } else {
+                item.classList.remove('selected');
+            }
+        });
+    }
+
+    public selectObject(uuid: string | null): void {
         this.selectedObjectUUID = uuid;
+        this.selectedObjectUUIDs = uuid ? new Set([uuid]) : new Set();
 
         // Update visual selection in tree
         const allItems = document.querySelectorAll('.tree-item');
         allItems.forEach(item => {
-            if ((item as HTMLElement).dataset.uuid === uuid) {
+            if (uuid && (item as HTMLElement).dataset.uuid === uuid) {
                 item.classList.add('selected');
             } else {
                 item.classList.remove('selected');
@@ -940,7 +967,7 @@ export class EditorUIController {
         });
 
         // Trigger callback
-        if (this.onObjectSelectCallback) {
+        if (uuid && this.onObjectSelectCallback) {
             this.onObjectSelectCallback(uuid);
         }
     }
@@ -953,7 +980,23 @@ export class EditorUIController {
         return 'dot-default';
     }
 
+    public setTool(tool: string): void {
+        this.setActiveTool(tool);
+    }
+
     public getCurrentTool(): string {
         return this.currentTool;
+    }
+
+    public onUndo(callback: () => void): void {
+        this.onUndoCallback = callback;
+    }
+
+    public onRedo(callback: () => void): void {
+        this.onRedoCallback = callback;
+    }
+
+    public updateUndoRedoUI(canUndo: boolean, canRedo: boolean, undoName?: string, redoName?: string): void {
+        // Keyboard-only mode
     }
 }
