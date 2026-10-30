@@ -110,6 +110,7 @@ export class SceneNode {
         let hasBounds = false;
 
         const collect = (node: SceneNode) => {
+            // Use cached boundingBox — updateBoundingBox() is called in updateWorldMatrix()
             if ((node as any).boundingBox) {
                 const b = (node as any).boundingBox;
                 minX = Math.min(minX, b.min[0]);

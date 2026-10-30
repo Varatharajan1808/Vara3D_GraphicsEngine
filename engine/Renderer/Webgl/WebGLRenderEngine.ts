@@ -947,14 +947,15 @@ export class WebGLRenderEngine {
 
     this.gl.disable(this.gl.BLEND);
 
-    // Draw single combined bounding box helper enclosing all selected meshes when 2 or more are selected (Three.js Editor style)
-    if (selectedObjects.length >= 2) {
+    // Draw single combined bounding box helper enclosing all selected meshes when 2 or more are selected, or when an imported model hierarchy is selected
+    const shouldDrawCombinedBox = selectedObjects.length >= 2 || (selectedObjects.length === 1 && (selectedObjects[0].parent !== null || (selectedObjects[0].children && selectedObjects[0].children.length > 0)));
+    if (shouldDrawCombinedBox) {
       let minX = Infinity, minY = Infinity, minZ = Infinity;
       let maxX = -Infinity, maxY = -Infinity, maxZ = -Infinity;
       let hasBounds = false;
 
       for (const mesh of selectedObjects) {
-        if (mesh.updateBoundingBox) mesh.updateBoundingBox();
+        // Use cached bounding box — no per-frame recomputation
         const box = mesh.getBoundingBox ? mesh.getBoundingBox() : mesh.boundingBox;
         if (box && isFinite(box.min[0]) && isFinite(box.max[0])) {
           minX = Math.min(minX, box.min[0]);

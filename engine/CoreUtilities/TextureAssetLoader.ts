@@ -48,7 +48,6 @@ export class TextureAssetLoader {
     );
 
     const image = new Image();
-    image.crossOrigin = "anonymous";
     image.onload = () => {
       gl.bindTexture(gl.TEXTURE_2D, texture);
       gl.texImage2D(
@@ -99,7 +98,6 @@ export class TextureAssetLoader {
       );
 
       const image = new Image();
-    image.crossOrigin = "anonymous";
       image.onload = () => {
         this.gl.bindTexture(this.gl.TEXTURE_2D, texture);
         this.gl.texImage2D(
@@ -131,20 +129,15 @@ export class TextureAssetLoader {
           );
         }
 
-        // Create base64 from image (safeguarded)
-        let base64Image: string | null = null;
-        try {
-          const canvas = document.createElement("canvas");
-          const ctx = canvas.getContext("2d");
-          canvas.width = image.width;
-          canvas.height = image.height;
-          ctx?.drawImage(image, 0, 0);
-          base64Image = canvas.toDataURL("image/png");
-        } catch (e) {
-          console.warn("[TextureAssetLoader] Could not export canvas to base64:", e);
-        }
+        // Create base64 from image (optional)
+        const canvas = document.createElement("canvas");
+        const ctx = canvas.getContext("2d");
+        canvas.width = image.width;
+        canvas.height = image.height;
+        ctx?.drawImage(image, 0, 0);
+        const base64Image = canvas.toDataURL();
 
-        const textureData: TextureData = { texture, base64Image: base64Image || url };
+        const textureData: TextureData = { texture, base64Image };
 
         // Cache it
         this.textureCache.set(url, textureData);

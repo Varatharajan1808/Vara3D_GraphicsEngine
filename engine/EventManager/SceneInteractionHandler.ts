@@ -78,7 +78,7 @@ export class SceneInteractionHandler {
   mouseY: number;
   rayDirection: number[];
   rayOrigin: number[];
-  select: RenderableMeshObject[];
+  select: any[];
   rotationCenter: number[];
   objectPivotPosition: { x: number; y: number; z: number };
   originalObjectPosition: { x: number; y: number; z: number };
@@ -86,7 +86,7 @@ export class SceneInteractionHandler {
   originalObjectScale: { x: number; y: number; z: number };
   dragStartPosition: { x: number; y: number };
   activeAxis: Axis | null;
-  selectedObject: RenderableMeshObject | null;
+  selectedObject: any;
   gizmo: TransformGizmoController | null;
   webgl: WebGLRenderEngine;
   initialMouseAngle: number = 0;
@@ -98,7 +98,7 @@ export class SceneInteractionHandler {
   onSelect?: (uuid: string | null) => void;
   onMultiSelect?: (uuids: string[]) => void;
   onDelete?: (uuid: string) => void;
-  onDeleteNodes?: (nodes: RenderableMeshObject[]) => void;
+  onDeleteNodes?: (nodes: any[]) => void;
   onTransformComplete?: (
     startStates: ObjectTransformSnapshot[],
     endStates: ObjectTransformSnapshot[]
@@ -492,13 +492,23 @@ export class SceneInteractionHandler {
             return;
           }
 
+          // In Object Mode: If the clicked mesh is part of an imported model or group hierarchy, select the model root!
+          let targetObject: any = clickedObject;
+          if (this.editorMode !== 'edit' && clickedObject && clickedObject.parent) {
+            let curr: any = clickedObject;
+            while (curr.parent) {
+              curr = curr.parent;
+            }
+            targetObject = curr;
+          }
+
           // Ctrl / Shift click object selection toggle or multi-select
           if (event.ctrlKey || event.shiftKey || event.metaKey) {
-            const existingIdx = this.select.findIndex((o) => o.uuid === clickedObject.uuid);
+            const existingIdx = this.select.findIndex((o) => o.uuid === targetObject.uuid);
             if (existingIdx >= 0) {
               this.select.splice(existingIdx, 1);
             } else {
-              this.select.push(clickedObject);
+              this.select.push(targetObject);
             }
             if (this.select.length > 0) {
               this.isObjectSelected = true;
@@ -525,34 +535,36 @@ export class SceneInteractionHandler {
 
           // Default object selection logic
           this.isObjectSelected = true;
-          this.selectedObject = clickedObject;
-          this.select = [clickedObject];
+          this.selectedObject = targetObject;
+          this.select = [targetObject];
 
           // Update the WebGL instance's selectedObject
-          this.webgl.selectedObject = clickedObject;
+          this.webgl.selectedObject = targetObject;
 
           // Clear edit selections on selection change
-          clickedObject.selectedVertexIndex = undefined;
-          clickedObject.selectedEdgeVertices = undefined;
-          clickedObject.highlightedFace = undefined;
+          if (clickedObject) {
+            clickedObject.selectedVertexIndex = undefined;
+            clickedObject.selectedEdgeVertices = undefined;
+            clickedObject.highlightedFace = undefined;
+          }
           this.selectedVertices = [];
 
           this.dragStartPosition = { x: event.clientX, y: event.clientY };
           this.objectPivotPosition = {
-            x: clickedObject.position.x,
-            y: clickedObject.position.y,
-            z: clickedObject.position.z,
+            x: targetObject.position.x,
+            y: targetObject.position.y,
+            z: targetObject.position.z,
           };
           this.originalObjectPosition = { ...this.objectPivotPosition };
           this.originalObjectRotation = {
-            x: clickedObject.rotate.x,
-            y: clickedObject.rotate.y,
-            z: clickedObject.rotate.z,
+            x: targetObject.rotate.x,
+            y: targetObject.rotate.y,
+            z: targetObject.rotate.z,
           };
           this.originalObjectScale = {
-            x: clickedObject.scale.x,
-            y: clickedObject.scale.y,
-            z: clickedObject.scale.z,
+            x: targetObject.scale.x,
+            y: targetObject.scale.y,
+            z: targetObject.scale.z,
           };
 
           if (this.gizmo) {
@@ -560,7 +572,7 @@ export class SceneInteractionHandler {
             if (!this.gizmo.currentGizmoType) {
               this.gizmo.setMode("translate");
             }
-            this.updateGizmoPosition(clickedObject);
+            this.updateGizmoPosition(targetObject);
             if (!this.gizmo.gizmoMeshes.length) {
               this.gizmo.addToScene(this.scene);
             }
@@ -572,7 +584,7 @@ export class SceneInteractionHandler {
             document.getElementById("Type")
           );
           if (this.onSelect) {
-            this.onSelect(clickedObject.uuid || null);
+            this.onSelect(targetObject.uuid || null);
           }
           return;
         }
@@ -1586,13 +1598,22 @@ export class SceneInteractionHandler {
     }
   }
   updateGizmoPosition(obj: SelectableObjectType): void {
-    if (this.gizmo && obj.worldMatrix) {
-      // Extract world position from world matrix (elements 12, 13, 14)
+    if (!this.gizmo || !obj) return;
+    const box = (obj as any).getBoundingBox ? (obj as any).getBoundingBox() : (obj as any).boundingBox;
+    if (box && isFinite(box.min[0]) && isFinite(box.max[0])) {
+      this.gizmo.position.x = (box.min[0] + box.max[0]) / 2;
+      this.gizmo.position.y = (box.min[1] + box.max[1]) / 2;
+      this.gizmo.position.z = (box.min[2] + box.max[2]) / 2;
+    } else if (obj.worldMatrix) {
       this.gizmo.position.x = obj.worldMatrix[12];
       this.gizmo.position.y = obj.worldMatrix[13];
       this.gizmo.position.z = obj.worldMatrix[14];
-      this.gizmo.updateLocalMatrix();
+    } else if (obj.position) {
+      this.gizmo.position.x = obj.position.x;
+      this.gizmo.position.y = obj.position.y;
+      this.gizmo.position.z = obj.position.z;
     }
+    this.gizmo.updateLocalMatrix();
   }
   applyRotationUpdate(obj: SelectableObjectType): void {
     obj.position = this.objectPivotPosition;
@@ -1953,8 +1974,9 @@ export class SceneInteractionHandler {
     }
   }
   controlEvent(): number[] {
-    if (this.isObjectSelected && this.gizmo) {
-      // In edit mode, don't auto-align gizmo to mesh origin if a sub-element is selected
+    // Only update gizmo position during active gizmo interaction (dragging),
+    // not every frame — avoids expensive getBoundingBox() calls 60x/sec
+    if (this.isObjectSelected && this.gizmo && this.isGizmoInteraction) {
       if (this.editorMode !== 'edit' || this.selectedVertices.length === 0) {
         if (this.select && this.select.length > 1) {
           this.updateGizmoPositionForMultiSelection();
@@ -2208,9 +2230,7 @@ export class SceneInteractionHandler {
     let hasBounds = false;
 
     for (const obj of this.select) {
-      if ((obj as any).updateBoundingBox) {
-        (obj as any).updateBoundingBox();
-      }
+      // Use cached bounding box — no need to recompute
       const box = (obj as any).getBoundingBox ? (obj as any).getBoundingBox() : (obj as any).boundingBox;
       if (box && isFinite(box.min[0]) && isFinite(box.max[0])) {
         minX = Math.min(minX, box.min[0]);

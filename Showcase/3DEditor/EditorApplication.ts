@@ -201,6 +201,8 @@ const uiManager = new EditorUIController();
 // Core Undo / Redo System & Helper Functions
 // ============================================================================
 let previousSelectionSignature: string = "";
+let cachedSelectedUUIDs: Set<string> = new Set();
+let lastSelectionCacheKey: string = "";
 let previousSelectedUUID: string | null = null;
 
 // ============================================================================
@@ -261,7 +263,7 @@ function selectSingleObject(obj: any) {
   previousSelectedUUID = obj.uuid;
   previousSelectionSignature = obj.uuid;
   updateObjectProperties(obj);
-  if (obj instanceof RenderableMeshObject) {
+  if (obj instanceof RenderableMeshObject || (obj instanceof SceneNode && !(obj instanceof LightNode))) {
     events.selectedObject = obj;
     events.isObjectSelected = true;
     events.select = [obj];
@@ -613,80 +615,42 @@ uiManager.onNodeDelete((uuid: string) => {
   deleteObjectFromScene(uuid);
 });
 
-// Handle object selection
+// Handle object selection from Scene Graph tree UI
 uiManager.onObjectSelect((uuid: string) => {
-  // Find object in scene
-  let foundObject: any = null;
+  const foundObject = findObjectByUUID(uuid);
+  if (!foundObject) return;
 
-  // Check meshes
-  for (const mesh of scene.objects) {
-    if (mesh.uuid === uuid) {
-      foundObject = mesh;
-      break;
-    }
-    // Check children
-    if (mesh.children) {
-      for (const child of mesh.children) {
-        if (child.uuid === uuid) {
-          foundObject = child;
-          break;
-        }
-      }
-    }
-  }
+  selectedObject = foundObject;
+  previousSelectedUUID = uuid;
+  updateObjectProperties(foundObject);
 
-  // Check lights - handle LightNode instances
-  if (!foundObject) {
-    for (const light of scene.lights) {
-      if (light.uuid === uuid) {
-        foundObject = light;
-        break;
+  program = unifiedProgram;
+  gl.useProgram(program);
+
+  if (foundObject instanceof RenderableMeshObject || (foundObject instanceof SceneNode && !(foundObject instanceof LightNode))) {
+    events.selectedObject = foundObject;
+    events.isObjectSelected = true;
+    events.select = [foundObject];
+
+    if (events.webgl) {
+      events.webgl.selectedObject = foundObject;
+    }
+
+    if (events.gizmo) {
+      events.gizmo.visible = true;
+      events.updateGizmoPosition(foundObject);
+      if (!events.gizmo.gizmoMeshes.length) {
+        events.gizmo.addToScene(scene);
       }
     }
-  }
-
-  // Check camera
-  if (!foundObject && camera.uuid === uuid) {
-    foundObject = camera;
-  }
-
-  if (foundObject) {
-    selectedObject = foundObject;
-    previousSelectedUUID = uuid; // Use the passed UUID directly
-    updateObjectProperties(foundObject);
-
-    // Dynamic Shader Switching removed - using Unified Shader
-    program = unifiedProgram;
-    gl.useProgram(program);
-
-    // If it's a mesh, select it in the scene
-    if (foundObject instanceof RenderableMeshObject) {
-      events.selectedObject = foundObject;
-      events.isObjectSelected = true;
-      events.select = [foundObject];
-
-      // Update WebGL selected object
-      if (events.webgl) {
-        events.webgl.selectedObject = foundObject;
-      }
-      console.log(foundObject);
-
-      if (events.gizmo) {
-        events.gizmo.visible = true;
-        events.updateGizmoPosition(foundObject);
-        if (!events.gizmo.gizmoMeshes.length) {
-          events.gizmo.addToScene(scene);
-        }
-      }
-    } else {
-      // Light or Camera selected from UI - clear viewport selection to avoid confusion
-      events.selectedObject = null;
-      events.isObjectSelected = false;
-      events.select = [];
-      if (events.gizmo) {
-        events.gizmo.visible = false;
-        events.gizmo.removeFromScene(scene);
-      }
+  } else {
+    // Light or Camera selected from UI - clear viewport selection
+    events.selectedObject = null;
+    events.isObjectSelected = false;
+    events.select = [];
+    if (events.gizmo) {
+      events.gizmo.visible = false;
+      events.gizmo.removeFromScene(scene);
     }
   }
 });
@@ -948,28 +912,28 @@ uiManager.onTransformChange((transform: any) => {
   if (selectedObject) {
     if (selectedObject instanceof SceneNode) {
       if (transform.position) {
-        selectedObject.position.x = transform.position.x;
-        selectedObject.position.y = transform.position.y;
-        selectedObject.position.z = transform.position.z;
+        if (!isNaN(transform.position.x)) selectedObject.position.x = transform.position.x;
+        if (!isNaN(transform.position.y)) selectedObject.position.y = transform.position.y;
+        if (!isNaN(transform.position.z)) selectedObject.position.z = transform.position.z;
         selectedObject.updateLocalMatrix();
       }
 
       if (transform.rotation && !(selectedObject instanceof LightNode)) {
-        selectedObject.rotate.x = transform.rotation.x;
-        selectedObject.rotate.y = transform.rotation.y;
-        selectedObject.rotate.z = transform.rotation.z;
+        if (!isNaN(transform.rotation.x)) selectedObject.rotate.x = transform.rotation.x;
+        if (!isNaN(transform.rotation.y)) selectedObject.rotate.y = transform.rotation.y;
+        if (!isNaN(transform.rotation.z)) selectedObject.rotate.z = transform.rotation.z;
         selectedObject.ObjectRotation();
       }
 
       if (transform.scale && !(selectedObject instanceof LightNode)) {
-        selectedObject.scale.x = transform.scale.x;
-        selectedObject.scale.y = transform.scale.y;
-        selectedObject.scale.z = transform.scale.z;
+        if (!isNaN(transform.scale.x)) selectedObject.scale.x = transform.scale.x;
+        if (!isNaN(transform.scale.y)) selectedObject.scale.y = transform.scale.y;
+        if (!isNaN(transform.scale.z)) selectedObject.scale.z = transform.scale.z;
         selectedObject.updateScale();
       }
 
       // Update gizmo
-      if (events.gizmo && selectedObject instanceof RenderableMeshObject) {
+      if (events.gizmo) {
         if (events.select && events.select.length > 1) {
           events.updateGizmoPositionForMultiSelection();
         } else {
@@ -1523,6 +1487,9 @@ async function loadModelFromFiles(inputFiles: File[] | FileList): Promise<void> 
     await loader.main([url], fileMap);
     updateSceneGraph();
     triggerAutoSave();
+    if (loader.lastImportedRoot) {
+      selectSingleObject(loader.lastImportedRoot);
+    }
   } catch (error) {
     console.error("Error loading model:", error);
     uiManager.showAlert("Import Error", `Failed to load model: ${(error as Error).message}`);
@@ -2010,14 +1977,32 @@ function animate() {
     (document.getElementById("camera-pos-z") as HTMLInputElement).value = camera.eye.z.toFixed(2);
   }
 
-  // Sync isSelected flag for rendering selection highlights across single and multi-selection
-  const selectedSet = new Set((events.select || []).map((o: any) => o.uuid));
-  if (selectedObject && !selectedSet.has(selectedObject.uuid)) {
-    selectedSet.add(selectedObject.uuid);
-  }
-  scene.objects.forEach((obj: any) => {
-    obj.isSelected = selectedSet.has(obj.uuid);
-  });
+  // Sync isSelected flag — use cached UUID set, only rebuild when selection changes
+    const selectionCacheKey = (events.select || []).map((o: any) => o?.uuid || '').join(',') + '|' + (selectedObject?.uuid || '');
+    if (selectionCacheKey !== lastSelectionCacheKey) {
+      lastSelectionCacheKey = selectionCacheKey;
+      cachedSelectedUUIDs.clear();
+      const collectSelected = (node: any) => {
+        if (!node) return;
+        cachedSelectedUUIDs.add(node.uuid);
+        if (node.children && node.children.length > 0) {
+          for (const child of node.children) {
+            collectSelected(child);
+          }
+        }
+      };
+      const selectedNodes = (events.select || []).slice();
+      if (selectedObject && !selectedNodes.some((o: any) => o.uuid === selectedObject.uuid)) {
+        selectedNodes.push(selectedObject);
+      }
+      for (const node of selectedNodes) {
+        collectSelected(node);
+      }
+    }
+
+    scene.objects.forEach((obj: any) => {
+      obj.isSelected = cachedSelectedUUIDs.has(obj.uuid);
+    });
 
   // Render
   webgl.Render(program, camera, scene);

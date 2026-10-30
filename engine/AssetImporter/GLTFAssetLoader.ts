@@ -188,6 +188,7 @@ export class GLTFAssetLoader {
   importedMeshes: RenderableMeshObject[];
   textureURIs: (string | null)[];
   nodeMap: Map<number, SceneNode> = new Map();
+  lastImportedRoot: SceneNode | null = null;
 
   constructor(gl: WebGLRenderingContext, scene: SceneHierarchyManager) {
     this.gl = gl;
@@ -468,6 +469,9 @@ export class GLTFAssetLoader {
         }
 
         const rootNode = new SceneNode(rootName);
+        rootNode.type = "Model";
+        (rootNode as any).isGLTFRoot = true;
+        this.lastImportedRoot = rootNode;
         this.scene.add(rootNode);
 
         // Find root nodes to process
