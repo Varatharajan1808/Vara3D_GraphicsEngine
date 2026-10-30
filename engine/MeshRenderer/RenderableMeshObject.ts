@@ -120,12 +120,19 @@ export class RenderableMeshObject extends SceneNode {
   }
 
   quaternionToEuler(quaternion: Quaternion): Vec3 {
-    const [x, y, z, w] = quaternion;
-    return {
-      x: Math.atan2(2 * (w * x + y * z), 1 - 2 * (x * x + y * y)),
-      y: Math.asin(2 * (w * y - z * x)),
-      z: Math.atan2(2 * (w * z + x * y), 1 - 2 * (y * y + z * z)),
-    };
+    const m = mat4.create();
+    mat4.fromQuat(m, quaternion as any);
+    const sinY = Math.max(-1, Math.min(1, m[8]));
+    const y = Math.asin(sinY);
+    let x: number, z: number;
+    if (Math.abs(sinY) < 0.9999999) {
+      x = Math.atan2(-m[9], m[10]);
+      z = Math.atan2(-m[4], m[0]);
+    } else {
+      x = Math.atan2(m[6], m[5]);
+      z = 0;
+    }
+    return { x, y, z };
   }
 
   updateLocalMatrix(): void {
@@ -200,55 +207,71 @@ export class RenderableMeshObject extends SceneNode {
   }
 
   updateBoundingBox(): void {
-    if (!this.vertices || this.vertices.length === 0) return;
+    const vertices = this.vertices;
+    if (!vertices || vertices.length === 0) return;
 
     if (!this.originalBoundingBox || this.geometryNeedsUpdate) {
       this.computeOriginalBoundingBox();
+      this.geometryNeedsUpdate = false;
     }
-    if (!this.originalBoundingBox) return;
 
     const worldMatrix = this.getWorldMatrix();
-    const lMin = this.originalBoundingBox.min;
-    const lMax = this.originalBoundingBox.max;
+    const len = vertices.length;
 
-    // 8 corners of the local bounding box transformed by world matrix
-    const corners = [
-      vec3.fromValues(lMin[0], lMin[1], lMin[2]),
-      vec3.fromValues(lMax[0], lMin[1], lMin[2]),
-      vec3.fromValues(lMin[0], lMax[1], lMin[2]),
-      vec3.fromValues(lMax[0], lMax[1], lMin[2]),
-      vec3.fromValues(lMin[0], lMin[1], lMax[2]),
-      vec3.fromValues(lMax[0], lMin[1], lMax[2]),
-      vec3.fromValues(lMin[0], lMax[1], lMax[2]),
-      vec3.fromValues(lMax[0], lMax[1], lMax[2]),
-    ];
+    let minX = Infinity, minY = Infinity, minZ = Infinity;
+    let maxX = -Infinity, maxY = -Infinity, maxZ = -Infinity;
 
-    const min: [number, number, number] = [Infinity, Infinity, Infinity];
-    const max: [number, number, number] = [-Infinity, -Infinity, -Infinity];
-    const transformed = vec3.create();
+    const m00 = worldMatrix[0], m01 = worldMatrix[1], m02 = worldMatrix[2];
+    const m10 = worldMatrix[4], m11 = worldMatrix[5], m12 = worldMatrix[6];
+    const m20 = worldMatrix[8], m21 = worldMatrix[9], m22 = worldMatrix[10];
+    const m30 = worldMatrix[12], m31 = worldMatrix[13], m32 = worldMatrix[14];
 
-    for (let i = 0; i < 8; i++) {
-      vec3.transformMat4(transformed, corners[i], worldMatrix);
-      min[0] = Math.min(min[0], transformed[0]);
-      min[1] = Math.min(min[1], transformed[1]);
-      min[2] = Math.min(min[2], transformed[2]);
-      max[0] = Math.max(max[0], transformed[0]);
-      max[1] = Math.max(max[1], transformed[1]);
-      max[2] = Math.max(max[2], transformed[2]);
+    // For very high vertex counts (>60,000 vertices), stride keeps calculation < 1ms
+    const stride = len > 180000 ? Math.ceil(len / 180000) * 3 : 3;
+
+    for (let i = 0; i < len; i += stride) {
+      const vx = vertices[i];
+      const vy = vertices[i + 1];
+      const vz = vertices[i + 2];
+      if (!isFinite(vx) || !isFinite(vy) || !isFinite(vz)) continue;
+
+      const wx = m00 * vx + m10 * vy + m20 * vz + m30;
+      const wy = m01 * vx + m11 * vy + m21 * vz + m31;
+      const wz = m02 * vx + m12 * vy + m22 * vz + m32;
+
+      if (wx < minX) minX = wx;
+      if (wx > maxX) maxX = wx;
+      if (wy < minY) minY = wy;
+      if (wy > maxY) maxY = wy;
+      if (wz < minZ) minZ = wz;
+      if (wz > maxZ) maxZ = wz;
     }
 
-    this.boundingBox = { min, max };
+    if (!isFinite(minX)) {
+      minX = -0.5; maxX = 0.5;
+      minY = -0.5; maxY = 0.5;
+      minZ = -0.5; maxZ = 0.5;
+    }
+    if (Math.abs(maxX - minX) < 0.001) { minX -= 0.001; maxX += 0.001; }
+    if (Math.abs(maxY - minY) < 0.001) { minY -= 0.001; maxY += 0.001; }
+    if (Math.abs(maxZ - minZ) < 0.001) { minZ -= 0.001; maxZ += 0.001; }
+
+    this.boundingBox = {
+      min: [minX, minY, minZ],
+      max: [maxX, maxY, maxZ],
+    };
 
     const center: [number, number, number] = [
-      (min[0] + max[0]) * 0.5,
-      (min[1] + max[1]) * 0.5,
-      (min[2] + max[2]) * 0.5,
+      (minX + maxX) * 0.5,
+      (minY + maxY) * 0.5,
+      (minZ + maxZ) * 0.5,
     ];
     const radius = Math.hypot(
-      max[0] - center[0],
-      max[1] - center[1],
-      max[2] - center[2]
+      maxX - center[0],
+      maxY - center[1],
+      maxZ - center[2]
     );
     this.boundingSphere = { center, radius };
   }
+
 }

@@ -1,3 +1,4 @@
+import { IndexedDBSceneStorage } from "../../engine/CoreUtilities/IndexedDBSceneStorage";
 import { CommandHistory, Command } from "../../engine/CoreUtilities/CommandHistory";
 import { ObjectTransformSnapshot } from "../../engine/EventManager/SceneInteractionHandler";
 import { ZipArchiveLoader } from "../../engine/CoreUtilities/ZipArchiveLoader";
@@ -153,6 +154,31 @@ const viewHelper = new ViewHelper(viewportContainer, camera, events);
 events.onSelect = (uuid) => {
   if (uuid) {
     uiManager.selectObject(uuid);
+    selectedObject = findObjectByUUID(uuid);
+    previousSelectedUUID = uuid;
+    if (selectedObject) {
+      updateObjectProperties(selectedObject);
+    }
+  } else {
+    selectedObject = null;
+    previousSelectedUUID = null;
+    uiManager.selectObject(null);
+    clearObjectProperties();
+  }
+};
+
+events.onMultiSelect = (uuids: string[]) => {
+  uiManager.selectObjects(uuids);
+  if (events.select && events.select.length > 0) {
+    selectedObject = events.select[events.select.length - 1];
+    previousSelectedUUID = selectedObject ? selectedObject.uuid : null;
+    if (selectedObject) {
+      updateObjectProperties(selectedObject);
+    }
+  } else {
+    selectedObject = null;
+    previousSelectedUUID = null;
+    clearObjectProperties();
   }
 };
 
@@ -176,9 +202,30 @@ const uiManager = new EditorUIController();
 // ============================================================================
 let previousSelectionSignature: string = "";
 let previousSelectedUUID: string | null = null;
+
+// ============================================================================
+// Auto-Save System (IndexedDB Background Storage)
+// ============================================================================
+let autoSaveTimeout: any = null;
+function triggerAutoSave() {
+  if (autoSaveTimeout) clearTimeout(autoSaveTimeout);
+  autoSaveTimeout = setTimeout(async () => {
+    try {
+      await IndexedDBSceneStorage.saveScene(scene, camera);
+    } catch (err) {
+      console.warn("[AutoSave] Error saving to IndexedDB:", err);
+    }
+  }, 1000);
+}
+
+window.addEventListener("beforeunload", () => {
+  IndexedDBSceneStorage.saveScene(scene, camera);
+});
+
 const commandHistory = new CommandHistory(50);
 commandHistory.onChange((canUndo, canRedo, undoName, redoName) => {
   uiManager.updateUndoRedoUI(canUndo, canRedo, undoName, redoName);
+  triggerAutoSave();
 });
 uiManager.onUndo(() => commandHistory.undo());
 uiManager.onRedo(() => commandHistory.redo());
@@ -294,26 +341,89 @@ events.onTransformComplete = (startStates, endStates) => {
   }, false);
 };
 
+// Handle interactive geometry change (Vertex/Edge/Face edits) Undo/Redo & AutoSave
+events.onGeometryChange = (mesh, prevVertices, newVertices) => {
+  commandHistory.execute({
+    name: "Edit Geometry",
+    execute: () => {
+      mesh.vertices = new Float32Array(newVertices);
+      if (mesh.geometry) {
+        mesh.geometry.Vertices = mesh.vertices;
+        mesh.geometry.type = "Custom-Mesh";
+      }
+      mesh.geometryNeedsUpdate = true;
+      events.recalculateNormals(mesh);
+      mesh.updateBoundingBox();
+      triggerAutoSave();
+    },
+    undo: () => {
+      mesh.vertices = new Float32Array(prevVertices);
+      if (mesh.geometry) {
+        mesh.geometry.Vertices = mesh.vertices;
+        mesh.geometry.type = "Custom-Mesh";
+      }
+      mesh.geometryNeedsUpdate = true;
+      events.recalculateNormals(mesh);
+      mesh.updateBoundingBox();
+      triggerAutoSave();
+    }
+  }, false);
+  triggerAutoSave();
+};
+
 function executeDeleteObjects(nodes: SceneNode[]) {
   if (!nodes || nodes.length === 0) return;
 
   const records = nodes.map((node) => ({
     node,
-    parent: node.parent || null
+    parent: node.parent || null,
   }));
 
   commandHistory.execute({
     name: nodes.length > 1 ? `Delete ${nodes.length} Objects` : `Delete ${nodes[0]?.name || "Object"}`,
     execute: () => {
       for (const rec of records) {
+        // Recursively remove tracking from createdObjects and lightInstances
+        const deleteTrackingRecursive = (n: SceneNode) => {
+          createdObjects.delete(n.uuid);
+          if (lightInstances.has(n.uuid)) {
+            lightInstances.delete(n.uuid);
+          }
+          if (n.children) {
+            for (const child of n.children) {
+              deleteTrackingRecursive(child);
+            }
+          }
+        };
+        deleteTrackingRecursive(rec.node);
+
+        // SceneHierarchyManager.remove recursively removes node and all descendant meshes/lights
         scene.remove(rec.node);
-        createdObjects.delete(rec.node.uuid);
-        if (lightInstances.has(rec.node.uuid)) {
-          lightInstances.delete(rec.node.uuid);
-        }
       }
-      deselectInEditor();
+
+      // Check if selectedObject (or items in events.select) was inside any deleted node
+      const isDescendantOrSelf = (target: any, root: SceneNode): boolean => {
+        if (!target || !root) return false;
+        if (target === root || target.uuid === root.uuid) return true;
+        if (root.children) {
+          for (const child of root.children) {
+            if (isDescendantOrSelf(target, child)) return true;
+          }
+        }
+        return false;
+      };
+
+      const selectedWasDeleted = records.some((rec) =>
+        (selectedObject && isDescendantOrSelf(selectedObject, rec.node)) ||
+        events.select.some((s: any) => isDescendantOrSelf(s, rec.node))
+      );
+
+      if (selectedWasDeleted) {
+        deselectInEditor();
+      }
+
       updateSceneGraph();
+      triggerAutoSave();
     },
     undo: () => {
       for (const rec of records) {
@@ -321,14 +431,28 @@ function executeDeleteObjects(nodes: SceneNode[]) {
         if (rec.parent) {
           rec.node.setParent(rec.parent);
         }
-        if (rec.node instanceof RenderableMeshObject) {
-          createdObjects.set(rec.node.uuid, rec.node);
-        }
+        const addTrackingRecursive = (n: SceneNode) => {
+          if (n instanceof RenderableMeshObject) {
+            createdObjects.set(n.uuid, n);
+          }
+          if (n.children) {
+            for (const child of n.children) {
+              addTrackingRecursive(child);
+            }
+          }
+        };
+        addTrackingRecursive(rec.node);
       }
       if (records.length === 1) {
         selectSingleObject(records[0].node);
       } else {
-        const meshes = records.map((r) => r.node).filter((n) => n instanceof RenderableMeshObject) as RenderableMeshObject[];
+        const meshes: RenderableMeshObject[] = [];
+        const collectMeshes = (n: SceneNode) => {
+          if (n instanceof RenderableMeshObject) meshes.push(n);
+          if (n.children) n.children.forEach(collectMeshes);
+        };
+        records.forEach((r) => collectMeshes(r.node));
+
         if (meshes.length > 0) {
           events.select = meshes;
           events.selectedObject = meshes[0];
@@ -339,6 +463,7 @@ function executeDeleteObjects(nodes: SceneNode[]) {
         }
       }
       updateSceneGraph();
+      triggerAutoSave();
     }
   }, true);
 }
@@ -447,6 +572,7 @@ uiManager.onNodeReparent((childUuid, parentUuid) => {
   if (childNode) {
     childNode.setParent(parentNode);
     updateSceneGraph();
+    triggerAutoSave();
     console.log(`Reparented ${childNode.name} to ${parentNode ? parentNode.name : 'Root'}`);
   }
 });
@@ -844,7 +970,11 @@ uiManager.onTransformChange((transform: any) => {
 
       // Update gizmo
       if (events.gizmo && selectedObject instanceof RenderableMeshObject) {
-        events.updateGizmoPosition(selectedObject);
+        if (events.select && events.select.length > 1) {
+          events.updateGizmoPositionForMultiSelection();
+        } else {
+          events.updateGizmoPosition(selectedObject);
+        }
       }
     } else if (selectedObject === camera) {
       if (transform.position) {
@@ -865,6 +995,7 @@ uiManager.onTransformChange((transform: any) => {
       }
     }
   }
+  triggerAutoSave();
 });
 
 // Handle texture library selection
@@ -875,22 +1006,27 @@ uiManager.onTextureSelect(async (type, url) => {
         if (type === "texture") {
           selectedObject.texture = null;
           selectedObject.textureURL = null;
+          selectedObject.image = null;
         } else {
           selectedObject.normalMap = null;
           selectedObject.normalMapURL = null;
+          selectedObject.normalMapImage = null;
         }
       } else {
         const textureData = await Texture.loadTextureAsync(url);
         if (type === "texture") {
           selectedObject.texture = textureData.texture;
-          selectedObject.textureURL = textureData.base64Image;
+          selectedObject.textureURL = textureData.base64Image || url;
+          selectedObject.image = (textureData.base64Image || url) as any;
         } else {
           selectedObject.normalMap = textureData.texture;
-          selectedObject.normalMapURL = textureData.base64Image;
+          selectedObject.normalMapURL = textureData.base64Image || url;
+          selectedObject.normalMapImage = (textureData.base64Image || url) as any;
         }
       }
       // Force update
       selectedObject.geometryNeedsUpdate = true;
+      triggerAutoSave();
     } catch (error) {
       console.error(`Error handling unit library ${type}:`, error);
     }
@@ -1247,7 +1383,8 @@ document.getElementById("new-scene-btn")?.addEventListener("click", () => {
     cancelText: "Cancel",
     isDanger: true,
     onConfirm: () => {
-    // Clear all scene data
+      IndexedDBSceneStorage.clearSavedScene();
+      // Clear all scene data
     scene.nodes = [];
     scene.objects = [];
     scene.lights = [];
@@ -1385,6 +1522,7 @@ async function loadModelFromFiles(inputFiles: File[] | FileList): Promise<void> 
   try {
     await loader.main([url], fileMap);
     updateSceneGraph();
+    triggerAutoSave();
   } catch (error) {
     console.error("Error loading model:", error);
     uiManager.showAlert("Import Error", `Failed to load model: ${(error as Error).message}`);
@@ -1508,21 +1646,26 @@ document.getElementById("export-gltf-btn")?.addEventListener("click", () => {
 });
 
 // Handle texture loading
+// Handle texture loading
 document.getElementById("texture-file-input")?.addEventListener("change", async (e) => {
   const file = (e.target as HTMLInputElement).files?.[0];
   if (file && selectedObject && selectedObject instanceof RenderableMeshObject) {
-    const url = URL.createObjectURL(file);
-    try {
-      const texture = await Texture.loadTextureAsync(url);
-      selectedObject.texture = texture.texture;
-      selectedObject.textureURL = texture.base64Image;
-      // Force update
-      selectedObject.geometryNeedsUpdate = true;
-    } catch (error) {
-      console.error("Error loading texture:", error);
-    }
-    (e.target as HTMLInputElement).value = ""; // Clear input so the same file can be selected again
-    URL.revokeObjectURL(url);
+    const reader = new FileReader();
+    reader.onload = async () => {
+      try {
+        const dataUrl = reader.result as string;
+        const texture = await Texture.loadTextureAsync(dataUrl);
+        selectedObject.texture = texture.texture;
+        selectedObject.textureURL = dataUrl;
+        selectedObject.image = dataUrl as any;
+        selectedObject.geometryNeedsUpdate = true;
+        triggerAutoSave();
+      } catch (error) {
+        console.error("Error loading texture:", error);
+      }
+    };
+    reader.readAsDataURL(file);
+    (e.target as HTMLInputElement).value = "";
   }
 });
 
@@ -1530,18 +1673,22 @@ document.getElementById("texture-file-input")?.addEventListener("change", async 
 document.getElementById("normal-file-input")?.addEventListener("change", async (e) => {
   const file = (e.target as HTMLInputElement).files?.[0];
   if (file && selectedObject && selectedObject instanceof RenderableMeshObject) {
-    const url = URL.createObjectURL(file);
-    try {
-      const normalMap = await Texture.loadTextureAsync(url);
-      selectedObject.normalMap = normalMap.texture;
-      selectedObject.normalMapURL = normalMap.base64Image;
-      // Force update
-      selectedObject.geometryNeedsUpdate = true;
-    } catch (error) {
-      console.error("Error loading normal map:", error);
-    }
-    (e.target as HTMLInputElement).value = ""; // Clear input so the same file can be selected again
-    URL.revokeObjectURL(url);
+    const reader = new FileReader();
+    reader.onload = async () => {
+      try {
+        const dataUrl = reader.result as string;
+        const normalMap = await Texture.loadTextureAsync(dataUrl);
+        selectedObject.normalMap = normalMap.texture;
+        selectedObject.normalMapURL = dataUrl;
+        selectedObject.normalMapImage = dataUrl as any;
+        selectedObject.geometryNeedsUpdate = true;
+        triggerAutoSave();
+      } catch (error) {
+        console.error("Error loading normal map:", error);
+      }
+    };
+    reader.readAsDataURL(file);
+    (e.target as HTMLInputElement).value = "";
   }
 });
 
@@ -1597,6 +1744,7 @@ document.getElementById("base-color-input")?.addEventListener("input", (e) => {
     if (rgb) {
       selectedObject.material.color = [rgb.r / 255, rgb.g / 255, rgb.b / 255];
       (document.getElementById("base-color-swatch") as HTMLElement).style.backgroundColor = hex;
+      triggerAutoSave();
     }
   }
 });
@@ -1607,6 +1755,7 @@ document.getElementById("metallic-slider")?.addEventListener("input", (e) => {
     selectedObject.material.metallic = value;
     (document.getElementById("metallic-value") as HTMLElement).textContent = value.toFixed(2);
   }
+  triggerAutoSave();
 });
 
 document.getElementById("roughness-slider")?.addEventListener("input", (e) => {
@@ -1615,6 +1764,7 @@ document.getElementById("roughness-slider")?.addEventListener("input", (e) => {
     selectedObject.material.roughness = value;
     (document.getElementById("roughness-value") as HTMLElement).textContent = value.toFixed(2);
   }
+  triggerAutoSave();
 });
 
 document.getElementById("specular-slider")?.addEventListener("input", (e) => {
@@ -1623,6 +1773,7 @@ document.getElementById("specular-slider")?.addEventListener("input", (e) => {
     selectedObject.material.specular = value;
     (document.getElementById("specular-value") as HTMLElement).textContent = value.toString();
   }
+  triggerAutoSave();
 });
 
 document.getElementById("alpha-slider")?.addEventListener("input", (e) => {
@@ -1631,6 +1782,7 @@ document.getElementById("alpha-slider")?.addEventListener("input", (e) => {
     selectedObject.material.alpha = value;
     (document.getElementById("alpha-value") as HTMLElement).textContent = value.toFixed(2);
   }
+  triggerAutoSave();
 });
 
 document.getElementById("emission-color-input")?.addEventListener("input", (e) => {
@@ -1642,6 +1794,7 @@ document.getElementById("emission-color-input")?.addEventListener("input", (e) =
       (document.getElementById("emission-color-swatch") as HTMLElement).style.backgroundColor = hex;
     }
   }
+  triggerAutoSave();
 });
 
 document.getElementById("emission-intensity-slider")?.addEventListener("input", (e) => {
@@ -1650,6 +1803,7 @@ document.getElementById("emission-intensity-slider")?.addEventListener("input", 
     selectedObject.material.emissionIntensity = value;
     (document.getElementById("emission-intensity-value") as HTMLElement).textContent = value.toFixed(1);
   }
+  triggerAutoSave();
 });
 
 // Handle camera position changes
@@ -1661,6 +1815,7 @@ document.getElementById("camera-pos-x")?.addEventListener("input", (e) => {
     // Update orbit control parameters to match new camera position
     events.updateOrbitParametersFromEye(camera);
   }
+  triggerAutoSave();
 });
 
 document.getElementById("camera-pos-y")?.addEventListener("input", (e) => {
@@ -1671,6 +1826,7 @@ document.getElementById("camera-pos-y")?.addEventListener("input", (e) => {
     // Update orbit control parameters to match new camera position
     events.updateOrbitParametersFromEye(camera);
   }
+  triggerAutoSave();
 });
 
 document.getElementById("camera-pos-z")?.addEventListener("input", (e) => {
@@ -1681,6 +1837,7 @@ document.getElementById("camera-pos-z")?.addEventListener("input", (e) => {
     // Update orbit control parameters to match new camera position
     events.updateOrbitParametersFromEye(camera);
   }
+  triggerAutoSave();
 });
 
 // Handle light property changes
@@ -1690,6 +1847,7 @@ document.getElementById("light-pos-x")?.addEventListener("input", (e) => {
     selectedObject.position.x = value;
     selectedObject.updateLocalMatrix();
   }
+  triggerAutoSave();
 });
 
 document.getElementById("light-pos-y")?.addEventListener("input", (e) => {
@@ -1698,6 +1856,7 @@ document.getElementById("light-pos-y")?.addEventListener("input", (e) => {
     selectedObject.position.y = value;
     selectedObject.updateLocalMatrix();
   }
+  triggerAutoSave();
 });
 
 document.getElementById("light-pos-z")?.addEventListener("input", (e) => {
@@ -1706,6 +1865,7 @@ document.getElementById("light-pos-z")?.addEventListener("input", (e) => {
     selectedObject.position.z = value;
     selectedObject.updateLocalMatrix();
   }
+  triggerAutoSave();
 });
 
 document.getElementById("light-color-input")?.addEventListener("input", (e) => {
@@ -1717,6 +1877,7 @@ document.getElementById("light-color-input")?.addEventListener("input", (e) => {
       (document.getElementById("light-color-swatch") as HTMLElement).style.backgroundColor = hex;
     }
   }
+  triggerAutoSave();
 });
 
 document.getElementById("light-intensity-slider")?.addEventListener("input", (e) => {
@@ -1725,6 +1886,7 @@ document.getElementById("light-intensity-slider")?.addEventListener("input", (e)
     selectedObject.intensity = value;
     (document.getElementById("light-intensity-value") as HTMLElement).textContent = value.toFixed(1);
   }
+  triggerAutoSave();
 });
 
 // Handle light radius changes (Point Light)
@@ -1848,9 +2010,13 @@ function animate() {
     (document.getElementById("camera-pos-z") as HTMLInputElement).value = camera.eye.z.toFixed(2);
   }
 
-  // Sync isSelected flag for rendering selection highlights
+  // Sync isSelected flag for rendering selection highlights across single and multi-selection
+  const selectedSet = new Set((events.select || []).map((o: any) => o.uuid));
+  if (selectedObject && !selectedSet.has(selectedObject.uuid)) {
+    selectedSet.add(selectedObject.uuid);
+  }
   scene.objects.forEach((obj: any) => {
-    obj.isSelected = !!(selectedObject && obj.uuid === selectedObject.uuid);
+    obj.isSelected = selectedSet.has(obj.uuid);
   });
 
   // Render
@@ -1903,3 +2069,26 @@ window.addEventListener("keydown", (e: KeyboardEvent) => {
     return;
   }
 });
+
+
+// Auto-Restore Session from IndexedDB if saved scene exists
+(async () => {
+  try {
+    const saved = await IndexedDBSceneStorage.loadScene();
+    if (saved && saved.nodes && saved.nodes.length > 0) {
+      console.log(`[IndexedDB] Restoring saved session from ${new Date(saved.timestamp).toLocaleTimeString()}...`);
+      await IndexedDBSceneStorage.restoreScene(
+        saved,
+        scene,
+        createdObjects,
+        gl,
+        material,
+        camera
+      );
+      updateSceneGraph();
+      console.log("[IndexedDB] Session successfully restored!");
+    }
+  } catch (err) {
+    console.warn("[IndexedDB] Session auto-restore error:", err);
+  }
+})();

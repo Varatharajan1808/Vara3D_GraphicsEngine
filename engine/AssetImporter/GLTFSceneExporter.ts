@@ -1,4 +1,4 @@
-import { mat4, vec3, vec4 } from "../MathLibrary/gl-matrix";
+import { mat4, vec3, vec4, quat } from "../MathLibrary/gl-matrix";
 import { TextureCoordinates } from "../GeometryPrimitives/UVCoordinateMapper";
 import { NormalsData } from "../GeometryPrimitives/SurfaceNormalCalculator";
 import { Tangents } from "../GeometryPrimitives/TangentSpaceCalculator";
@@ -660,35 +660,23 @@ export class GLTFSceneExporter {
     return btoa(binary);
   }
 
-  private computeRelativeTransforms(meshes: any[]): void {
-    const meshMap = new Map(meshes.map((mesh: any) => [mesh.uuid, mesh]));
+  private computeRelativeTransforms(allNodes: any[]): void {
+    const nodeMap = new Map(allNodes.map((n: any) => [n.uuid, n]));
 
-    for (const mesh of meshes) {
-      if (!mesh.parent) {
-        mesh.relativeTransform = this.decomposeMatrix(mesh.localMatrix);
-        continue;
+    for (const node of allNodes) {
+      if (node.parent && nodeMap.has(node.parent.uuid)) {
+        // Node has a parent exported in the GLTF tree.
+        // In SceneNode, node.localMatrix is already strictly relative to its parent!
+        node.relativeTransform = this.decomposeMatrix(node.localMatrix);
+      } else {
+        // Root node in export (no parent, or parent was excluded from export).
+        // Use worldMatrix if available so that world-space position/orientation is preserved.
+        const matrix =
+          node.worldMatrix && node.worldMatrix.length === 16
+            ? node.worldMatrix
+            : node.localMatrix;
+        node.relativeTransform = this.decomposeMatrix(matrix);
       }
-
-      const parent = meshMap.get(mesh.parent.uuid);
-      if (!parent || !parent.localMatrix) {
-        mesh.relativeTransform = this.decomposeMatrix(mesh.localMatrix);
-        continue;
-      }
-
-      const parentMatrixInverse = mat4.create();
-      if (!mat4.invert(
-        parentMatrixInverse,
-        parent.localMatrix
-      )) {
-        mat4.identity(parentMatrixInverse);
-      }
-      const relativeMatrix = mat4.create();
-      mat4.multiply(
-        relativeMatrix,
-        parentMatrixInverse,
-        mesh.localMatrix
-      );
-      mesh.relativeTransform = this.decomposeMatrix(relativeMatrix as any);
     }
   }
 
@@ -708,6 +696,7 @@ export class GLTFSceneExporter {
     mat4.getTranslation(translation, matrix as any);
     mat4.getRotation(rotation, matrix as any);
     mat4.getScaling(scale, matrix as any);
+    quat.normalize(rotation as any, rotation as any);
 
     return {
       translation: Array.from(translation),
@@ -736,7 +725,7 @@ export class GLTFSceneExporter {
           uuid: node.uuid,
           name: node.name || node.type || "Mesh",
           isMesh: true,
-          vertices: geometryData.Vertices ?? [],
+          vertices: (node.vertices ?? geometryData.Vertices) ?? [],
           normals: geometryData.Normals ?? NormalsData ?? [],
           texCoords: geometryData.TextureCoordinates ?? TextureCoordinates ?? [],
           tangents: geometryData.Tangents ?? Tangents ?? [],
@@ -755,6 +744,7 @@ export class GLTFSceneExporter {
           normalMapImage: node.normalMapImage ?? null,
           normalMapURL: (node as any).normalMapURL ?? null,
           localMatrix: node.localMatrix ?? [],
+          worldMatrix: node.worldMatrix ?? [],
           parent: null as any,
           children: [] as any[],
           sceneNode: node,
@@ -769,6 +759,7 @@ export class GLTFSceneExporter {
           name: node.name || "Group",
           isMesh: false,
           localMatrix: node.localMatrix ?? [],
+          worldMatrix: node.worldMatrix ?? [],
           parent: null as any,
           children: [] as any[],
           sceneNode: node,

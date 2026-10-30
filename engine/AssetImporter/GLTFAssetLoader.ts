@@ -604,12 +604,23 @@ export class GLTFAssetLoader {
   }
 
   private quaternionToEuler(quaternion: [number, number, number, number]): { x: number; y: number; z: number } {
-    const [x, y, z, w] = quaternion;
-    return {
-      x: Math.atan2(2 * (w * x + y * z), 1 - 2 * (x * x + y * y)),
-      y: Math.asin(Math.max(-1, Math.min(1, 2 * (w * y - z * x)))),
-      z: Math.atan2(2 * (w * z + x * y), 1 - 2 * (y * y + z * z)),
-    };
+    const m = mat4.create();
+    mat4.fromQuat(m, quaternion as any);
+    // SceneNode uses intrinsic order: rotateX, then rotateY, then rotateZ (XYZ order)
+    // In gl-matrix column-major 4x4 matrix:
+    // m[8] is column 2 row 0 = sin(y)
+    const sinY = Math.max(-1, Math.min(1, m[8]));
+    const y = Math.asin(sinY);
+    let x: number, z: number;
+    if (Math.abs(sinY) < 0.9999999) {
+      x = Math.atan2(-m[9], m[10]);
+      z = Math.atan2(-m[4], m[0]);
+    } else {
+      // Gimbal lock fallback
+      x = Math.atan2(m[6], m[5]);
+      z = 0;
+    }
+    return { x, y, z };
   }
 
   private getMeshForPrimitive(

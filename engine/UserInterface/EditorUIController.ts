@@ -395,14 +395,14 @@ export class EditorUIController {
 
         const textures = [
             { name: 'None', url: '' },
-            { name: 'Bricks', url: '../../engine/Textures/brick_wall_02_diff_2k.jpg' },
-            { name: 'Tiles', url: '../../engine/Textures/clay_roof_tiles_02_diff_1k.png' }
+            { name: 'Bricks', url: 'engine/Textures/brick_wall_02_diff_2k.jpg' },
+            { name: 'Tiles', url: 'engine/Textures/clay_roof_tiles_02_diff_1k.png' }
         ];
 
         const normalMaps = [
             { name: 'None', url: '' },
-            { name: 'Tiles Normal', url: '../../engine/Textures/clay_roof_tiles_02_nor_gl_1k.png' },
-            { name: 'Stone Normal', url: '../../engine/Textures/normal_mapping_normal_map_resized_66d168742d720.png' }
+            { name: 'Tiles Normal', url: 'engine/Textures/clay_roof_tiles_02_nor_gl_1k.png' },
+            { name: 'Stone Normal', url: 'engine/Textures/normal_mapping_normal_map_resized_66d168742d720.png' }
         ];
 
         if (textureLibrary) {

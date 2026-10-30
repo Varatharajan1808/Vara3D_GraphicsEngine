@@ -18,6 +18,7 @@ export namespace mat4 {
     export function lookAt(out: glMatrix.Mat4, eye: glMatrix.Vec3, center: glMatrix.Vec3, up: glMatrix.Vec3): glMatrix.Mat4;
     export function multiply(out: glMatrix.Mat4, a: glMatrix.Mat4, b: glMatrix.Mat4): glMatrix.Mat4;
     export function invert(out: glMatrix.Mat4, a: glMatrix.Mat4): glMatrix.Mat4 | null;
+    export function fromQuat(out: glMatrix.Mat4, q: glMatrix.Quat): glMatrix.Mat4;
     export function fromRotationTranslationScale(out: glMatrix.Mat4, q: glMatrix.Quat, v: glMatrix.Vec3, s: glMatrix.Vec3): glMatrix.Mat4;
     export function getTranslation(out: glMatrix.Vec3, mat: glMatrix.Mat4): glMatrix.Vec3;
     export function getRotation(out: glMatrix.Quat, mat: glMatrix.Mat4): glMatrix.Quat;
@@ -46,4 +47,5 @@ export namespace vec4 {
 
 export namespace quat {
     export function create(): glMatrix.Quat;
+    export function normalize(out: glMatrix.Quat, a: glMatrix.Quat): glMatrix.Quat;
 }

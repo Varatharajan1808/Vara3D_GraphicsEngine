@@ -103,4 +103,37 @@ export class SceneNode {
     ObjectRotation(): void {
         this.updateLocalMatrix();
     }
+
+    getBoundingBox(): { min: [number, number, number]; max: [number, number, number] } | null {
+        let minX = Infinity, minY = Infinity, minZ = Infinity;
+        let maxX = -Infinity, maxY = -Infinity, maxZ = -Infinity;
+        let hasBounds = false;
+
+        const collect = (node: SceneNode) => {
+            if ((node as any).boundingBox) {
+                const b = (node as any).boundingBox;
+                minX = Math.min(minX, b.min[0]);
+                minY = Math.min(minY, b.min[1]);
+                minZ = Math.min(minZ, b.min[2]);
+                maxX = Math.max(maxX, b.max[0]);
+                maxY = Math.max(maxY, b.max[1]);
+                maxZ = Math.max(maxZ, b.max[2]);
+                hasBounds = true;
+            }
+            if (node.children) {
+                for (const child of node.children) {
+                    collect(child);
+                }
+            }
+        };
+
+        collect(this);
+
+        if (!hasBounds) return null;
+        return {
+            min: [minX, minY, minZ],
+            max: [maxX, maxY, maxZ],
+        };
+    }
+
 }

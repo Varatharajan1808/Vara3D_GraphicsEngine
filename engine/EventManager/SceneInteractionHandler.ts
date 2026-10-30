@@ -103,6 +103,11 @@ export class SceneInteractionHandler {
     startStates: ObjectTransformSnapshot[],
     endStates: ObjectTransformSnapshot[]
   ) => void;
+  onGeometryChange?: (
+    mesh: RenderableMeshObject,
+    prevVertices: number[],
+    newVertices: number[]
+  ) => void;
   transformStartSnapshots: ObjectTransformSnapshot[] = [];
   isMarqueeMode: boolean = false;
   isMarqueeSelecting: boolean = false;
@@ -452,6 +457,7 @@ export class SceneInteractionHandler {
                 clickedObject.selectedEdgeVertices = undefined;
 
                 this.selectedVertices = this.getMatchingVertices(clickedObject, clickedFaceIndices);
+                this.originalVertexPositions = [...(clickedObject.vertices as number[])];
 
                 // Position gizmo at centroid
                 const vertices = clickedObject.vertices;
@@ -486,7 +492,7 @@ export class SceneInteractionHandler {
             return;
           }
 
-          // Ctrl / Shift click object selection toggle or single select
+          // Ctrl / Shift click object selection toggle or multi-select
           if (event.ctrlKey || event.shiftKey || event.metaKey) {
             const existingIdx = this.select.findIndex((o) => o.uuid === clickedObject.uuid);
             if (existingIdx >= 0) {
@@ -498,6 +504,15 @@ export class SceneInteractionHandler {
               this.isObjectSelected = true;
               this.selectedObject = this.select[this.select.length - 1];
               this.webgl.selectedObject = this.selectedObject;
+              this.dragStartPosition = { x: event.clientX, y: event.clientY };
+              this.originalMultiPositions = new Map();
+              for (const obj of this.select) {
+                this.originalMultiPositions.set(obj.uuid, {
+                  x: obj.position.x,
+                  y: obj.position.y,
+                  z: obj.position.z,
+                });
+              }
               this.updateGizmoPositionForMultiSelection();
               if (this.onMultiSelect) {
                 this.onMultiSelect(this.select.map((o) => o.uuid));
@@ -622,6 +637,9 @@ export class SceneInteractionHandler {
 
     if (this.onSelect) {
       this.onSelect(null);
+    }
+    if (this.onMultiSelect) {
+      this.onMultiSelect([]);
     }
   }
   events(): void {
@@ -822,6 +840,32 @@ export class SceneInteractionHandler {
       this.isGizmoInteraction = false;
       this.isTransformationActive = false;
       this.isDirectDragging = false;
+
+      // Check geometry edits (vertex, edge, face)
+      if (this.editorMode === 'edit' && this.selectedObject && this.originalVertexPositions && this.originalVertexPositions.length > 0) {
+        const currentVertices = this.selectedObject.vertices as number[];
+        let vertexMoved = false;
+        if (currentVertices && currentVertices.length === this.originalVertexPositions.length) {
+          for (let i = 0; i < currentVertices.length; i++) {
+            if (Math.abs(currentVertices[i] - this.originalVertexPositions[i]) > 0.0001) {
+              vertexMoved = true;
+              break;
+            }
+          }
+        }
+        if (vertexMoved) {
+          if (this.selectedObject.geometry) {
+            this.selectedObject.geometry.Vertices = this.selectedObject.vertices;
+            this.selectedObject.geometry.Normals = this.selectedObject.normals;
+          }
+          const prevVertices = [...this.originalVertexPositions];
+          const newVertices = [...currentVertices];
+          this.originalVertexPositions = [...currentVertices];
+          if (this.onGeometryChange) {
+            this.onGeometryChange(this.selectedObject, prevVertices, newVertices);
+          }
+        }
+      }
       this.activeButton = -1;
 
       // Clear all active states for gizmo parts
@@ -855,39 +899,91 @@ export class SceneInteractionHandler {
     if (gizmoResult) {
       return { selectObject: [gizmoResult] };
     }
-    const sceneResult = this.checkSceneIntersections();
-    if (sceneResult) {
-      const faceHit = this.checkFaceIntersections(sceneResult);
 
-      if (faceHit) {
-        return {
-          selectObject: [sceneResult],
-          selectedFace: faceHit,
-          answer: true,
-        };
+    let closestObject: RenderableMeshObject | null = null;
+    let closestFaceHit: any = null;
+    let minHitDistance = Infinity;
+    let fallbackBoxObject: RenderableMeshObject | null = null;
+    let minBoxDistance = Infinity;
+
+    for (const object of this.scene.objects) {
+      if (object.type === "Grid-Geometry" || !object.boundingBox || object.visible === false || object.isGizmoPart) continue;
+
+      const tBox = this.intersectRayWithBoundingBox(
+        this.rayOrigin,
+        this.rayDirection.slice(0, 3) as Vec3,
+        object.boundingBox.min,
+        object.boundingBox.max
+      );
+      if (tBox === null || tBox <= 0) continue;
+
+      if (tBox < minBoxDistance) {
+        minBoxDistance = tBox;
+        fallbackBoxObject = object;
+      }
+
+      const faceHit = this.checkFaceIntersections(object);
+      if (faceHit && faceHit.intersectionPoint) {
+        const dx = faceHit.intersectionPoint[0] - this.rayOrigin[0];
+        const dy = faceHit.intersectionPoint[1] - this.rayOrigin[1];
+        const dz = faceHit.intersectionPoint[2] - this.rayOrigin[2];
+        const dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
+        if (dist < minHitDistance) {
+          minHitDistance = dist;
+          closestObject = object;
+          closestFaceHit = faceHit;
+        }
       }
     }
+
+    if (closestObject) {
+      return {
+        selectObject: [closestObject],
+        selectedFace: closestFaceHit,
+        answer: true,
+      };
+    }
+
+    // Only fallback to bounding box if mesh has no indices/triangles
+    if (fallbackBoxObject && (!fallbackBoxObject.indices || fallbackBoxObject.indices.length === 0)) {
+      return {
+        selectObject: [fallbackBoxObject],
+        answer: true,
+      };
+    }
+
     return {
-      selectObject: sceneResult ? [sceneResult] : [],
-      answer: !!sceneResult,
+      selectObject: [],
+      answer: false,
     };
   }
-  // Replace the existing checkFaceIntersections method with this corrected version
+
   checkFaceIntersections(mesh: RenderableMeshObject): {
     faceIndex: number;
     vertexIndices: number[];
     intersectionPoint: Vec3;
   } | null {
-    const vertices = mesh.geometry.Vertices;
-    const indices = mesh.geometry.Indices;
+    const vertices = mesh.vertices || mesh.geometry?.Vertices;
+    if (!vertices || vertices.length === 0) return null;
+    const indices = mesh.indices || mesh.geometry?.Indices;
     const modelMatrix = mesh.getWorldMatrix();
     let closestT = Infinity;
     let closestFaceIndex = -1;
     let closestIntersectionPoint: Vec3 | null = null;
-    for (let i = 0; i < indices.length; i += 3) {
-      const ai = indices[i] * 3;
-      const bi = indices[i + 1] * 3;
-      const ci = indices[i + 2] * 3;
+
+    const hasIndices = indices && indices.length > 0;
+    const count = hasIndices ? indices.length : vertices.length / 3;
+
+    for (let i = 0; i < count; i += 3) {
+      const idxA = hasIndices ? indices[i] : i;
+      const idxB = hasIndices ? indices[i + 1] : i + 1;
+      const idxC = hasIndices ? indices[i + 2] : i + 2;
+
+      const ai = idxA * 3;
+      const bi = idxB * 3;
+      const ci = idxC * 3;
+
+      if (ci + 2 >= vertices.length) break;
 
       const vA = vec3.fromValues(vertices[ai], vertices[ai + 1], vertices[ai + 2]);
       const vB = vec3.fromValues(vertices[bi], vertices[bi + 1], vertices[bi + 2]);
@@ -917,7 +1013,6 @@ export class SceneInteractionHandler {
       }
     }
     if (closestFaceIndex >= 0 && closestIntersectionPoint) {
-      // Get the complete face (quad or triangle) that contains this triangle
       const completeFace = this.getCompleteFace(mesh, closestFaceIndex);
       return {
         faceIndex: closestFaceIndex,
@@ -927,6 +1022,7 @@ export class SceneInteractionHandler {
     }
     return null;
   }
+
   checkGizmoIntersections(): RenderableMeshObject | null {
     if (!this.gizmo || !this.gizmo.visible || !this.gizmo.gizmoMeshes) {
       return null;
@@ -948,25 +1044,12 @@ export class SceneInteractionHandler {
     }
     return closestGizmoPart;
   }
+
   checkSceneIntersections(): RenderableMeshObject | null {
-    let closestObject: RenderableMeshObject | null = null;
-    let minDistance = Infinity;
-    for (const object of this.scene.objects) {
-      if (object.type === "Grid-Geometry" || !object.boundingBox || object.visible === false) continue;
-      const t = this.intersectRayWithBoundingBox(
-        this.rayOrigin,
-        this.rayDirection.slice(0, 3) as Vec3,
-        object.boundingBox.min,
-        object.boundingBox.max
-      );
-      if (t !== null && t > 0 && t < minDistance) {
-        this.logDebugInfo(object);
-        minDistance = t;
-        closestObject = object;
-      }
-    }
-    return closestObject;
+    const res = this.checkIntersections();
+    return res.selectObject && res.selectObject.length > 0 ? res.selectObject[0] : null;
   }
+
   handleMouseHover(event: MouseEvent): void {
     // Clear all hover highlights for regular objects and gizmos
     this.scene.objects.forEach((obj: any) => {
@@ -1695,6 +1778,10 @@ export class SceneInteractionHandler {
       this.selectedObject.geometryNeedsUpdate = true;
       this.selectedObject.geometry.type = "Custom-Mesh"; // Bypass primitive normals map
       this.recalculateNormals(this.selectedObject);
+      if (this.selectedObject.geometry) {
+        this.selectedObject.geometry.Vertices = this.selectedObject.vertices;
+        this.selectedObject.geometry.Normals = this.selectedObject.normals;
+      }
       this.selectedObject.updateBoundingBox();
 
       // 5. Update Gizmo position to the new world position of the selection center
@@ -1728,18 +1815,7 @@ export class SceneInteractionHandler {
           obj.updateTranslate();
         }
       }
-      if (this.gizmo) {
-        let avgX = 0, avgY = 0, avgZ = 0;
-        for (const obj of this.select) {
-          avgX += obj.position.x;
-          avgY += obj.position.y;
-          avgZ += obj.position.z;
-        }
-        this.gizmo.position.x = avgX / this.select.length;
-        this.gizmo.position.y = avgY / this.select.length;
-        this.gizmo.position.z = avgZ / this.select.length;
-        this.gizmo.updateLocalMatrix();
-      }
+      this.updateGizmoPositionForMultiSelection();
       return;
     }
 
@@ -1877,10 +1953,14 @@ export class SceneInteractionHandler {
     }
   }
   controlEvent(): number[] {
-    if (this.isObjectSelected && this.selectedObject && this.gizmo) {
+    if (this.isObjectSelected && this.gizmo) {
       // In edit mode, don't auto-align gizmo to mesh origin if a sub-element is selected
       if (this.editorMode !== 'edit' || this.selectedVertices.length === 0) {
-        this.updateGizmoPosition(this.selectedObject);
+        if (this.select && this.select.length > 1) {
+          this.updateGizmoPositionForMultiSelection();
+        } else if (this.selectedObject) {
+          this.updateGizmoPosition(this.selectedObject);
+        }
       }
     }
     const cameraAngleX = ((this.rotationX * this.sensitivity) / 180) * Math.PI;
@@ -2105,24 +2185,61 @@ export class SceneInteractionHandler {
     this.selectedObject.geometryNeedsUpdate = true;
     this.selectedObject.geometry.type = "Custom-Mesh";
     this.recalculateNormals(this.selectedObject);
+    if (this.selectedObject.geometry) {
+      this.selectedObject.geometry.Vertices = this.selectedObject.vertices;
+      this.selectedObject.geometry.Normals = this.selectedObject.normals;
+    }
     this.selectedObject.updateBoundingBox();
   }
 
   updateGizmoPositionForMultiSelection(): void {
     if (!this.gizmo) return;
-    if (this.select.length === 0) {
+    if (!this.select || this.select.length === 0) {
       this.gizmo.visible = false;
       return;
     }
-    let avgX = 0, avgY = 0, avgZ = 0;
-    for (const obj of this.select) {
-      avgX += obj.position.x;
-      avgY += obj.position.y;
-      avgZ += obj.position.z;
+    if (this.select.length === 1) {
+      this.updateGizmoPosition(this.select[0]);
+      return;
     }
-    this.gizmo.position.x = avgX / this.select.length;
-    this.gizmo.position.y = avgY / this.select.length;
-    this.gizmo.position.z = avgZ / this.select.length;
+
+    let minX = Infinity, minY = Infinity, minZ = Infinity;
+    let maxX = -Infinity, maxY = -Infinity, maxZ = -Infinity;
+    let hasBounds = false;
+
+    for (const obj of this.select) {
+      if ((obj as any).updateBoundingBox) {
+        (obj as any).updateBoundingBox();
+      }
+      const box = (obj as any).getBoundingBox ? (obj as any).getBoundingBox() : (obj as any).boundingBox;
+      if (box && isFinite(box.min[0]) && isFinite(box.max[0])) {
+        minX = Math.min(minX, box.min[0]);
+        minY = Math.min(minY, box.min[1]);
+        minZ = Math.min(minZ, box.min[2]);
+        maxX = Math.max(maxX, box.max[0]);
+        maxY = Math.max(maxY, box.max[1]);
+        maxZ = Math.max(maxZ, box.max[2]);
+        hasBounds = true;
+      } else {
+        const wm = (obj as any).getWorldMatrix ? (obj as any).getWorldMatrix() : (obj as any).worldMatrix;
+        const wx = wm ? wm[12] : obj.position.x;
+        const wy = wm ? wm[13] : obj.position.y;
+        const wz = wm ? wm[14] : obj.position.z;
+        minX = Math.min(minX, wx);
+        minY = Math.min(minY, wy);
+        minZ = Math.min(minZ, wz);
+        maxX = Math.max(maxX, wx);
+        maxY = Math.max(maxY, wy);
+        maxZ = Math.max(maxZ, wz);
+        hasBounds = true;
+      }
+    }
+
+    if (hasBounds) {
+      this.gizmo.position.x = (minX + maxX) / 2;
+      this.gizmo.position.y = (minY + maxY) / 2;
+      this.gizmo.position.z = (minZ + maxZ) / 2;
+    }
     this.gizmo.updateLocalMatrix();
     this.gizmo.visible = true;
     if (!this.gizmo.gizmoMeshes.length) {

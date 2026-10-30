@@ -54,6 +54,7 @@ export class WebGLRenderEngine {
   mouseX?: number;
   mouseY?: number;
   selectedObject: any = null;
+  private combinedBoxBuffer: WebGLBuffer | null = null;
   editorMode: string = "object";
   editSubMode: string = "vertex";
   pointProgram: WebGLProgram | null = null;
@@ -514,7 +515,7 @@ export class WebGLRenderEngine {
         mesh.indexBuffer = createElementBuffer(this.gl, mesh.indices || []);
       }
       if (!mesh.normalBuffer || mesh.geometryNeedsUpdate) {
-        mesh.normalBuffer = createBuffer(this.gl, data.Normals || []);
+        mesh.normalBuffer = createBuffer(this.gl, mesh.normals || data.Normals || []);
       }
       if (!mesh.textureBuffer || mesh.geometryNeedsUpdate) {
         mesh.textureBuffer = createBuffer(
@@ -523,7 +524,7 @@ export class WebGLRenderEngine {
         );
       }
       if (!mesh.tangentBuffer || mesh.geometryNeedsUpdate) {
-        mesh.tangentBuffer = createBuffer(this.gl, data.Tangents || []);
+        mesh.tangentBuffer = createBuffer(this.gl, mesh.tangent || data.Tangents || []);
       }
       // Dynamically generate silhouette index buffer if selected
       if (mesh.isSelected && mesh.indices && mesh.indices.length > 0 && mesh.vertices && mesh.vertices.length > 0) {
@@ -946,6 +947,32 @@ export class WebGLRenderEngine {
 
     this.gl.disable(this.gl.BLEND);
 
+    // Draw single combined bounding box helper enclosing all selected meshes when 2 or more are selected (Three.js Editor style)
+    if (selectedObjects.length >= 2) {
+      let minX = Infinity, minY = Infinity, minZ = Infinity;
+      let maxX = -Infinity, maxY = -Infinity, maxZ = -Infinity;
+      let hasBounds = false;
+
+      for (const mesh of selectedObjects) {
+        if (mesh.updateBoundingBox) mesh.updateBoundingBox();
+        const box = mesh.getBoundingBox ? mesh.getBoundingBox() : mesh.boundingBox;
+        if (box && isFinite(box.min[0]) && isFinite(box.max[0])) {
+          minX = Math.min(minX, box.min[0]);
+          minY = Math.min(minY, box.min[1]);
+          minZ = Math.min(minZ, box.min[2]);
+          maxX = Math.max(maxX, box.max[0]);
+          maxY = Math.max(maxY, box.max[1]);
+          maxZ = Math.max(maxZ, box.max[2]);
+          hasBounds = true;
+        }
+      }
+
+      if (hasBounds) {
+        this.drawCombinedBoundingBox([minX, minY, minZ], [maxX, maxY, maxZ], program, camera);
+        incrementDrawCall();
+      }
+    }
+
     // Ensure depth test is re-enabled for subsequent rendering
     this.gl.enable(this.gl.DEPTH_TEST);
   }
@@ -1000,6 +1027,88 @@ export class WebGLRenderEngine {
     this._currentDrawCalls = drawCalls;
   }
 
+  // Helper method to draw a combined bounding box around multi-selected objects (Three.js Editor BoxHelper style)
+  drawCombinedBoundingBox(
+    min: [number, number, number],
+    max: [number, number, number],
+    program: WebGLProgram,
+    camera: any
+  ): void {
+    const [x1, y1, z1] = min;
+    const [x2, y2, z2] = max;
+
+    // 12 edges of an axis-aligned bounding box (24 vertices = 72 floats)
+    const boxVertices = new Float32Array([
+      // Bottom face edges
+      x1, y1, z1,  x2, y1, z1,
+      x2, y1, z1,  x2, y1, z2,
+      x2, y1, z2,  x1, y1, z2,
+      x1, y1, z2,  x1, y1, z1,
+
+      // Top face edges
+      x1, y2, z1,  x2, y2, z1,
+      x2, y2, z1,  x2, y2, z2,
+      x2, y2, z2,  x1, y2, z2,
+      x1, y2, z2,  x1, y2, z1,
+
+      // Vertical connecting edges
+      x1, y1, z1,  x1, y2, z1,
+      x2, y1, z1,  x2, y2, z1,
+      x2, y1, z2,  x2, y2, z2,
+      x1, y1, z2,  x1, y2, z2,
+    ]);
+
+    if (!this.combinedBoxBuffer) {
+      this.combinedBoxBuffer = this.gl.createBuffer();
+    }
+    this.gl.bindBuffer(this.gl.ARRAY_BUFFER, this.combinedBoxBuffer);
+    this.gl.bufferData(this.gl.ARRAY_BUFFER, boxVertices, this.gl.DYNAMIC_DRAW);
+
+    // Disable non-position vertex attributes to prevent shader mismatch
+    const aNormalLoc = this.gl.getAttribLocation(program, "aNormal");
+    if (aNormalLoc >= 0) {
+      this.gl.disableVertexAttribArray(aNormalLoc);
+      this.gl.vertexAttrib3f(aNormalLoc, 0.0, 1.0, 0.0);
+    }
+    const aTexLoc = this.gl.getAttribLocation(program, "aTextureCoord");
+    if (aTexLoc >= 0) {
+      this.gl.disableVertexAttribArray(aTexLoc);
+      this.gl.vertexAttrib2f(aTexLoc, 0.0, 0.0);
+    }
+    const aTangentLoc = this.gl.getAttribLocation(program, "aTangent");
+    if (aTangentLoc >= 0) {
+      this.gl.disableVertexAttribArray(aTangentLoc);
+      this.gl.vertexAttrib3f(aTangentLoc, 1.0, 0.0, 0.0);
+    }
+
+    getAttribLocation(this.gl, program, "aPosition", this.combinedBoxBuffer, 3);
+
+    const identityMat = (mat4.create() as unknown) as Float32Array;
+    getUniformLocation(this.gl, program, "u_modelMatrix", identityMat);
+    this.setCameraUniforms(this.gl, program, camera);
+
+    // Three.js selection yellow/gold
+    const boxColor: [number, number, number] = [1.0, 0.88, 0.1];
+    this.setMaterialUniforms(this.gl, program, {
+      color: boxColor,
+      roughness: 0.0,
+      metallic: 0.0,
+      emissionColor: boxColor,
+      emissionIntensity: 1.0,
+      alpha: 1.0,
+    });
+
+    this.gl.uniform1i(this.gl.getUniformLocation(program, "uHasTexture"), 0);
+    this.gl.uniform1i(this.gl.getUniformLocation(program, "uHasNormalMap"), 0);
+
+    // Render over scene objects without depth occlusion
+    this.gl.disable(this.gl.DEPTH_TEST);
+    this.gl.drawArrays(this.gl.LINES, 0, 24);
+    this.gl.enable(this.gl.DEPTH_TEST);
+
+    this.gl.bindBuffer(this.gl.ARRAY_BUFFER, null);
+  }
+
   // Helper method to draw a single mesh (for gizmo rendering)
   drawSingleMesh(
     mesh: any,
@@ -1029,10 +1138,10 @@ export class WebGLRenderEngine {
       mesh.indexBuffer = createElementBuffer(this.gl, mesh.indices || []);
     }
     if (!mesh.normalBuffer || mesh.geometryNeedsUpdate) {
-      mesh.normalBuffer = createBuffer(this.gl, data.Normals || []);
+      mesh.normalBuffer = createBuffer(this.gl, mesh.normals || data.Normals || []);
     }
     if (!mesh.textureBuffer || mesh.geometryNeedsUpdate) {
-      mesh.textureBuffer = createBuffer(this.gl, data.TextureCoordinates || []);
+      mesh.textureBuffer = createBuffer(this.gl, mesh.texCoord || data.TextureCoordinates || []);
     }
     if (!mesh.tangentBuffer || mesh.geometryNeedsUpdate) {
       mesh.tangentBuffer = createBuffer(this.gl, data.Tangents || []);
