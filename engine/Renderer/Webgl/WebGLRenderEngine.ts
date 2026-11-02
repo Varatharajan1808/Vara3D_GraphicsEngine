@@ -50,6 +50,8 @@ export class WebGLRenderEngine {
   editSubMode: string = "vertex";
   pointProgram: WebGLProgram | null = null;
   public frustumCulling: boolean = true;
+  public clearColor: [number, number, number, number] = [0.0, 0.0, 0.0, 1.0];
+  public isLightTheme: boolean = false;
 
   private _currentDrawCalls: number = 0;
   private _currentVertices: number = 0;
@@ -73,6 +75,12 @@ export class WebGLRenderEngine {
     // Create default textures
     this.defaultTexture = this.createDefaultTexture();
     this.defaultNormalMap = this.createDefaultNormalMap();
+
+    const initialTheme = (typeof document !== "undefined" && (
+      document.documentElement.getAttribute("data-theme") === "light" ||
+      (typeof localStorage !== "undefined" && localStorage.getItem("vara3d.theme") === "light")
+    )) ? "light" : "dark";
+    this.setTheme(initialTheme);
 
     // Compile shader program for Edit Mode vertex handles
     const pointVs = `
@@ -123,6 +131,19 @@ export class WebGLRenderEngine {
       triangles: this._currentTriangles,
     };
   }
+  public setClearColor(r: number, g: number, b: number, a: number = 1.0): void {
+    this.clearColor = [r, g, b, a];
+  }
+
+  public setTheme(theme: "light" | "dark"): void {
+    this.isLightTheme = theme === "light";
+    if (this.isLightTheme) {
+      this.setClearColor(0.941, 0.941, 0.949, 1.0);
+    } else {
+      this.setClearColor(0.0, 0.0, 0.0, 1.0);
+    }
+  }
+
   resize(Width: number, Height: number): void {
     this.canvas.width = Width;
     this.canvas.height = Height;
@@ -761,10 +782,26 @@ export class WebGLRenderEngine {
       if (hasHighlightedFace || hasHoveredFace) {
         this.drawMeshWithFaceHighlighting(mesh, program, materialProps);
       } else {
-        // Handle object-level hover (HIGHLIGHT COLOR: [1, 1, 0] is Yellow)
-        const finalMaterialProps = mesh.isHovered
-          ? { ...materialProps, color: [1.0, 1.0, 0.0], roughness: 0, metallic: 0 }
-          : materialProps;
+        // Handle object-level hover & Grid-Geometry theme styling
+        const isGrid = mesh.type === "Grid-Geometry";
+        let finalMaterialProps = materialProps;
+        if (mesh.isHovered) {
+          finalMaterialProps = { ...materialProps, color: [1.0, 1.0, 0.0], roughness: 0, metallic: 0 };
+        } else if (isGrid) {
+          const defaultGridColor: [number, number, number] = this.isLightTheme
+            ? [0.65, 0.65, 0.68]
+            : [0.35, 0.35, 0.38];
+          const gridColor = mesh.material?.color || defaultGridColor;
+          finalMaterialProps = {
+            ...materialProps,
+            color: gridColor,
+            emissionColor: mesh.material?.emissionColor ?? gridColor,
+            emissionIntensity: 1.0,
+            roughness: 1.0,
+            metallic: 0.0,
+            alpha: 1.0,
+          };
+        }
 
         this.setMaterialUniforms(this.gl, program, finalMaterialProps);
         if (!mesh.indices || !("length" in mesh.indices)) {
@@ -980,7 +1017,12 @@ export class WebGLRenderEngine {
     camera: any,
     scene: any
   ): void {
-    this.gl.clearColor(0.0, 0.0, 0.0, 1.0);
+    this.gl.clearColor(
+      this.clearColor[0],
+      this.clearColor[1],
+      this.clearColor[2],
+      this.clearColor[3]
+    );
     this.gl.clear(this.gl.COLOR_BUFFER_BIT | this.gl.DEPTH_BUFFER_BIT);
     this.gl.enable(this.gl.DEPTH_TEST);
 

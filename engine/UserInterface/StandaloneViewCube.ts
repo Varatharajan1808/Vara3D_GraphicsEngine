@@ -118,15 +118,59 @@ export class StandaloneViewCube {
     { label: "W", angle: -Math.PI / 2, yaw: -Math.PI / 2 },
   ];
 
-  private readonly COL_ACCENT = "#00e5ff";
-  private readonly COL_ACCENT_GLOW = "rgba(0, 229, 255, 0.45)";
-  private readonly COL_WHITE = "#ffffff";
-  private readonly COL_RING = "rgba(255, 255, 255, 0.20)";
-  private readonly COL_RING_TICK = "rgba(0, 229, 255, 0.50)";
-  private readonly COL_FACE_BORDER = "rgba(255, 255, 255, 0.22)";
-  private readonly COL_FACE_HOVER = "rgba(0, 229, 255, 0.35)";
-  private readonly COL_BG_GRADIENT_INNER = "rgba(18, 20, 28, 0.85)";
-  private readonly COL_BG_GRADIENT_OUTER = "rgba(18, 20, 28, 0.0)";
+  public isLightTheme: boolean = false;
+
+  private get COL_ACCENT(): string {
+    return this.isLightTheme ? "#0284c7" : "#00e5ff";
+  }
+  private get COL_ACCENT_GLOW(): string {
+    return this.isLightTheme ? "rgba(2, 132, 199, 0.25)" : "rgba(0, 229, 255, 0.45)";
+  }
+  private get COL_WHITE(): string {
+    return this.isLightTheme ? "#1e293b" : "#ffffff";
+  }
+  private get COL_RING(): string {
+    return this.isLightTheme ? "rgba(15, 23, 42, 0.18)" : "rgba(255, 255, 255, 0.20)";
+  }
+  private get COL_RING_TICK(): string {
+    return this.isLightTheme ? "rgba(2, 132, 199, 0.60)" : "rgba(0, 229, 255, 0.50)";
+  }
+  private get COL_FACE_BORDER(): string {
+    return this.isLightTheme ? "rgba(15, 23, 42, 0.16)" : "rgba(255, 255, 255, 0.22)";
+  }
+  private get COL_FACE_HOVER(): string {
+    return this.isLightTheme ? "rgba(2, 132, 199, 0.22)" : "rgba(0, 229, 255, 0.35)";
+  }
+  private get COL_BG_GRADIENT_INNER(): string {
+    return this.isLightTheme ? "rgba(240, 243, 246, 0.85)" : "rgba(18, 20, 28, 0.85)";
+  }
+  private get COL_BG_GRADIENT_OUTER(): string {
+    return this.isLightTheme ? "rgba(240, 243, 246, 0.0)" : "rgba(18, 20, 28, 0.0)";
+  }
+
+  public setTheme(theme: 'light' | 'dark'): void {
+    const isLight = theme === 'light';
+    if (this.isLightTheme !== isLight) {
+      this.isLightTheme = isLight;
+      this.updateCanvasStyle();
+      this.lastDrawnYaw = NaN;
+      this.lastDrawnPitch = NaN;
+      this.scheduleDraw();
+    }
+  }
+
+  private updateCanvasStyle(): void {
+    if (!this.canvas) return;
+    if (this.isLightTheme) {
+      this.canvas.style.background = "rgba(255, 255, 255, 0.75)";
+      this.canvas.style.border = "1px solid rgba(15, 23, 42, 0.12)";
+      this.canvas.style.boxShadow = "0 10px 30px rgba(0, 0, 0, 0.08), 0 0 15px rgba(2, 132, 199, 0.12)";
+    } else {
+      this.canvas.style.background = "rgba(22, 22, 26, 0.45)";
+      this.canvas.style.border = "1px solid rgba(255, 255, 255, 0.10)";
+      this.canvas.style.boxShadow = "0 10px 30px rgba(0, 0, 0, 0.45), 0 0 15px rgba(0, 229, 255, 0.1)";
+    }
+  }
 
   constructor(camera: IViewCubeCamera, container: HTMLElement = document.body) {
     this.camera = camera;
@@ -174,6 +218,21 @@ export class StandaloneViewCube {
 
     this.ctx = this.canvas.getContext("2d");
     container.appendChild(this.canvas);
+
+    const initialTheme = (typeof document !== 'undefined' && (
+      document.documentElement.getAttribute('data-theme') === 'light' ||
+      localStorage.getItem('vara3d.theme') === 'light'
+    )) ? 'light' : 'dark';
+    this.isLightTheme = initialTheme === 'light';
+    this.updateCanvasStyle();
+
+    if (typeof MutationObserver !== 'undefined' && typeof document !== 'undefined') {
+      const observer = new MutationObserver(() => {
+        const theme = document.documentElement.getAttribute('data-theme') === 'light' ? 'light' : 'dark';
+        this.setTheme(theme);
+      });
+      observer.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
+    }
   }
 
   private setupEventListeners(): void {
@@ -478,7 +537,7 @@ export class StandaloneViewCube {
       ctx.beginPath();
       ctx.moveTo(cx + (midR - halfTick) * cosT, cy + (midR - halfTick) * sinT);
       ctx.lineTo(cx + (midR + halfTick) * cosT, cy + (midR + halfTick) * sinT);
-      ctx.strokeStyle = isMajor ? "rgba(255, 255, 255, 0.5)" : this.COL_RING_TICK;
+      ctx.strokeStyle = isMajor ? (this.isLightTheme ? "rgba(15, 23, 42, 0.45)" : "rgba(255, 255, 255, 0.5)") : this.COL_RING_TICK;
       ctx.lineWidth = isMajor ? 1.8 : 1.0;
       ctx.stroke();
     }
@@ -559,7 +618,7 @@ export class StandaloneViewCube {
       ctx.font = `bold ${isActive || isHovered ? 12 : 10}px 'Space Grotesk', 'Segoe UI', sans-serif`;
       ctx.textAlign = "center";
       ctx.textBaseline = "middle";
-      ctx.fillStyle = isHovered || isActive ? this.COL_ACCENT : this.COL_WHITE;
+      ctx.fillStyle = isHovered || isActive ? this.COL_ACCENT : (this.isLightTheme ? "#1e293b" : this.COL_WHITE);
       ctx.fillText(c.label, lx, ly);
       ctx.restore();
     }
@@ -609,8 +668,13 @@ export class StandaloneViewCube {
         ctx.lineWidth = 2.0;
       } else {
         const cnz = vm[2] * face.normal[0] + vm[6] * face.normal[1] + vm[10] * face.normal[2];
-        const brightness = Math.floor(45 + cnz * 15);
-        ctx.fillStyle = `rgba(${brightness}, ${brightness}, ${brightness + 8}, 0.88)`;
+        if (this.isLightTheme) {
+          const brightness = Math.floor(215 + cnz * 25);
+          ctx.fillStyle = `rgba(${brightness}, ${brightness}, ${brightness + 4}, 0.92)`;
+        } else {
+          const brightness = Math.floor(45 + cnz * 15);
+          ctx.fillStyle = `rgba(${brightness}, ${brightness}, ${brightness + 8}, 0.88)`;
+        }
         ctx.strokeStyle = this.COL_FACE_BORDER;
         ctx.lineWidth = 1.0;
       }
@@ -626,7 +690,7 @@ export class StandaloneViewCube {
       ctx.font = `bold ${fontSize}px 'Space Grotesk', 'Segoe UI', sans-serif`;
       ctx.textAlign = "center";
       ctx.textBaseline = "middle";
-      ctx.fillStyle = isHovered ? "#ffffff" : "rgba(255, 255, 255, 0.75)";
+      ctx.fillStyle = this.isLightTheme ? (isHovered ? "#0284c7" : "rgba(15, 23, 42, 0.85)") : (isHovered ? "#ffffff" : "rgba(255, 255, 255, 0.75)");
       ctx.fillText(face.label, fx, fy);
     }
 
@@ -655,7 +719,7 @@ export class StandaloneViewCube {
       ctx.beginPath();
       ctx.arc(pt.x, pt.y, 5.5, 0, Math.PI * 2);
       ctx.fillStyle = this.COL_ACCENT;
-      ctx.strokeStyle = "#ffffff";
+      ctx.strokeStyle = this.isLightTheme ? "#333333" : "#ffffff";
       ctx.lineWidth = 1.5;
       ctx.fill();
       ctx.stroke();

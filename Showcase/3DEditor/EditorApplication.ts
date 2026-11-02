@@ -237,6 +237,28 @@ events.onDelete = (uuid) => {
 // Initialize UI Manager
 const uiManager = new EditorUIController();
 
+// Theme application handler (adapts background, grid, and view cube to light/dark themes)
+function applyAppTheme(theme: 'dark' | 'light') {
+  webgl.setTheme(theme);
+  viewCube.setTheme(theme);
+
+  const isLight = theme === 'light';
+  const gridColor: [number, number, number] = isLight
+    ? [0.65, 0.65, 0.68]
+    : [0.35, 0.35, 0.38];
+
+  if (gridMesh && gridMesh.material) {
+    gridMesh.material.color = gridColor;
+    gridMesh.material.emissionColor = gridColor;
+    gridMesh.material.emissionIntensity = 1.0;
+  }
+}
+
+uiManager.onThemeChange((theme) => {
+  applyAppTheme(theme);
+});
+applyAppTheme(uiManager.getTheme());
+
 // ============================================================================
 // Core Undo / Redo System & Helper Functions
 // ============================================================================
@@ -423,6 +445,7 @@ uiManager.onGridChange((settings) => {
 
   gridMesh.visible = settings.visible;
   currentGridSettings = { ...settings };
+  applyAppTheme(uiManager.getTheme());
 });
 
 
@@ -1270,6 +1293,7 @@ document.getElementById("new-scene-btn")?.addEventListener("click", () => {
     gridMesh.position = { x: 0, y: 0, z: 0 };
     gridMesh.updateTranslate();
     scene.add(gridMesh);
+    applyAppTheme(uiManager.getTheme());
 
     // Re-add default cube
     const boxGeometry = new BoxGeometryBuilder();

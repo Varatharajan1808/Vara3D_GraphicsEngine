@@ -35,6 +35,7 @@ export class EditorUIController {
     private onNodeReparentCallback?: (childUuid: string, parentUuid: string | null) => void;
     private onNodeVisibilityCallback?: (uuid: string, visible: boolean) => void;
     private onNodeDeleteCallback?: (uuid: string) => void;
+    private onThemeChangeCallback?: (theme: 'dark' | 'light') => void;
 
     // Selected object tracking
     private selectedObjectUUID: string | null = null;
@@ -310,18 +311,22 @@ export class EditorUIController {
         }
     }
 
+    public getTheme(): 'dark' | 'light' {
+        const attr = document.documentElement.getAttribute('data-theme');
+        return attr === 'light' ? 'light' : 'dark';
+    }
+
+    public onThemeChange(callback: (theme: 'dark' | 'light') => void): void {
+        this.onThemeChangeCallback = callback;
+    }
+
     private setupThemeToggle(): void {
         const btn = document.getElementById('theme-toggle-btn');
         if (!btn) return;
 
         const storageKey = 'vara3d.theme';
 
-        const getTheme = (): 'light' | 'dark' => {
-            const attr = document.documentElement.getAttribute('data-theme');
-            return attr === 'light' ? 'light' : 'dark';
-        };
-
-        const apply = (theme: 'light' | 'dark') => {
+        const apply = (theme: 'light' | 'dark', notify: boolean = true) => {
             document.documentElement.setAttribute('data-theme', theme);
             const isLight = theme === 'light';
             btn.title = isLight ? 'Switch to dark theme' : 'Switch to light theme';
@@ -330,6 +335,9 @@ export class EditorUIController {
                 localStorage.setItem(storageKey, theme);
             } catch {
                 /* ignore */
+            }
+            if (notify && this.onThemeChangeCallback) {
+                this.onThemeChangeCallback(theme);
             }
         };
 
@@ -340,14 +348,31 @@ export class EditorUIController {
                 theme = saved;
             }
         } catch {
-            theme = getTheme();
+            theme = this.getTheme();
         }
-        apply(theme);
+        apply(theme, false);
 
         btn.addEventListener('click', (e) => {
             e.stopPropagation();
-            apply(getTheme() === 'light' ? 'dark' : 'light');
+            apply(this.getTheme() === 'light' ? 'dark' : 'light', true);
         });
+
+        if (typeof MutationObserver !== 'undefined' && typeof document !== 'undefined') {
+            const observer = new MutationObserver((mutations) => {
+                for (const m of mutations) {
+                    if (m.attributeName === 'data-theme') {
+                        const current = this.getTheme();
+                        const isLight = current === 'light';
+                        btn.title = isLight ? 'Switch to dark theme' : 'Switch to light theme';
+                        btn.setAttribute('aria-label', btn.title);
+                        if (this.onThemeChangeCallback) {
+                            this.onThemeChangeCallback(current);
+                        }
+                    }
+                }
+            });
+            observer.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
+        }
     }
 
     private setupInspectorToggle(): void {

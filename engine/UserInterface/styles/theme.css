@@ -74,6 +74,10 @@
   --z-modal: 200;
   --z-tooltip: 300;
 
+  /* Viewport & Grid variables - Dark Theme */
+  --viewport-bg: #000000;
+  --grid-color: #555555;
+
   color-scheme: dark;
 }
 
@@ -102,6 +106,10 @@
   --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.08);
   --shadow-md: 0 2px 6px rgba(0, 0, 0, 0.12);
   --shadow-lg: 0 4px 12px rgba(0, 0, 0, 0.16);
+
+  /* Viewport & Grid variables - Light Theme */
+  --viewport-bg: #f0f0f2;
+  --grid-color: #b0b0b8;
 
   color-scheme: light;
 }
