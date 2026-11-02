@@ -68,12 +68,15 @@ export class SessionPersistenceController {
     const { scene, camera, events, createdObjects, gl, material } = this.deps;
     try {
       const saved = await IndexedDBSceneStorage.loadScene();
-      if (!saved || !saved.nodes || saved.nodes.length === 0) {
+      // Any saved record counts (including empty nodes[] after user deleted everything).
+      // Only "no autosave key" should fall through to default starter content.
+      if (!saved || !Array.isArray(saved.nodes)) {
         return false;
       }
 
       console.log(
-        `[IndexedDB] Restoring saved session from ${new Date(saved.timestamp).toLocaleTimeString()}...`
+        `[IndexedDB] Restoring saved session from ${new Date(saved.timestamp).toLocaleTimeString()}...` +
+          (saved.nodes.length === 0 ? " (empty scene)" : "")
       );
       await IndexedDBSceneStorage.restoreScene(
         saved,

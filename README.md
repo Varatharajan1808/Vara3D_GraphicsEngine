@@ -4,68 +4,101 @@
 [![WebGL](https://img.shields.io/badge/WebGL-990000?style=for-the-badge&logo=webgl&logoColor=white)](https://developer.mozilla.org/en-US/docs/Web/API/WebGL_API)
 [![License: ISC](https://img.shields.io/badge/License-ISC-blue.svg?style=for-the-badge)](https://opensource.org/licenses/ISC)
 
- [Badges] 
 ![3D Editor Interface](./images/image.png)
 
-### Highlights
+Browser-based **3D graphics engine** and **visual editor**, built from scratch in **TypeScript** with **raw WebGL** (no Three.js / Babylon).
 
-- Scene Graph
-- Physically Based Rendering (PBR)
-- GLTF / GLB Import & Export
-- Transform Gizmos
-- WebGL Rendering Pipeline
-- TypeScript
-- WebGPU (In Progress)
-
-## Introduction 
-
-A browser-based 3D Graphics Engine and visual editor built from scratch using TypeScript and raw WebGL, without relying on high-level rendering frameworks.
-
-The project focuses on graphics engine architecture, rendering pipelines, shader programming, scene graph management, physically based rendering (PBR), asset pipelines, and interactive editing tools while providing a deeper understanding of modern real-time rendering.
-
-## Disclaimer
-
-This is a personal graphics programming project developed independently for learning and experimentation. It does not contain proprietary code, assets, or confidential information from any employer.
-
-## Live demo [varatha3deditor.vercel.app](https://varatha3deditor.vercel.app/)
+**Live demo:** [varatha3deditor.vercel.app](https://varatha3deditor.vercel.app/)
 
 ---
 
-## Core Features
+## What this project is
 
-![Core Rendering Features - WebGL Materials & Textures](./images/image1.png)
+Learning-focused graphics engine work: rendering pipeline, GLSL shaders, PBR materials, scene graph hierarchy, GLTF I/O, and an interactive editor on top.
 
-- Custom WebGL rendering pipeline
-- Physically Based Rendering (PBR)
-- GLSL shader system
-- Scene Graph architecture
-- Parent-child transform hierarchy
+It is a **personal / independent** project for learning and experimentation — not employer or proprietary code.
+
+---
+
+## Highlights
+
+| Area | What you get |
+|------|----------------|
+| Rendering | Custom WebGL pipeline, GLSL shaders, PBR |
+| Scene | Parent–child hierarchy, world transforms, Empty groups |
+| Assets | GLTF / GLB import & export (incl. zip folders) |
+| Editing | Translate / Rotate / Scale gizmos, materials, lights |
+| Viewport | Orbit ViewCube, grid helper, FPS / draw-call stats |
+| Session | IndexedDB autosave (survives refresh; empty scene stays empty) |
+
+WebGPU is **planned** (status chip in the editor says “WebGPU soon”) — the editor runs on **WebGL** today.
+
+---
+
+## Engine features
+
+![Core Rendering Features](./images/image1.png)
+
+- Custom WebGL render loop and shader library
+- Physically Based Rendering (unified light path)
+- Point / spot / directional lights (hierarchy-aware world space)
+- Scene graph with cycle-safe, world-preserving reparent
 - Frustum culling
 - GLTF / GLB import & export
-- Material and lighting system
-- Interactive visual editor
-- Transform Gizmos (Translate / Rotate / Scale)
-- Interactive SVG View Helper (Camera Orientation & Axis Indicator)
-- Real-time rendering statistics (FPS & Draw Calls)
+- Geometry primitives (box, sphere, plane, cone, cylinder)
+- Transform gizmos and viewport picking
 
 ---
 
-## Editor Features  
+## Editor features
 
-The integrated editor provides tools for interacting with the rendering engine in real time.
+![Interactive Visual Editor](./images/image2.png)
 
-![Interactive Visual Editor - 3D Models & Scene Tree Controls](./images/image2.png)
+- **Scene Graph** — select, show/hide, delete, drag to parent, keyboard ↑↓ / ←→
+- **Inspector** — transforms, materials, textures / normal maps, light props
+- **Add menu** — Empty, meshes, lights, camera projection
+- **ViewCube** — face / orbit orientation control
+- **Light / dark theme** (saved preference)
+- **Collapsible panels** + responsive inspector (`I` to toggle)
+- **Toasts** for import / export / actions
+- **Keyboard shortcuts** — press **`?`** in the top bar
+- Autosave to IndexedDB (meshes restore first; textures fill in async)
 
-- Scene hierarchy panel
-- Property inspector
-- Material editor
-- Light management
-- Transform gizmos
-- Interactive SVG View Helper (viewport orientation & axis alignment)
-- GLTF / GLB import & export
-- Texture & normal map management
-- FPS counter
-- Draw call statistics
+---
+
+## Useful shortcuts
+
+| Action | Keys |
+|--------|------|
+| File / Add menu | `Shift+F` / `Shift+A` |
+| Translate / Rotate / Scale | `T` / `R` / `S` |
+| Object / Edit mode | `O` / `E` |
+| Focus selection | `F` |
+| Toggle inspector | `I` |
+| Undo / Redo | `Ctrl+Z` / `Ctrl+Y` |
+| Copy / Paste / Duplicate | `Ctrl+C` / `Ctrl+V` / `Ctrl+D` |
+| Orbit / Pan / Zoom | LMB drag (empty) / MMB or RMB / Scroll |
+
+Full list: click **`?`** in the editor.
+
+---
+
+## Getting started
+
+**Requirements:** Node.js 16+, npm
+
+```bash
+git clone https://github.com/Varatharajan1808/Vara3D-Graphics-Engine.git
+cd Vara3D-Graphics-Engine
+npm install
+npm run dev
+```
+
+Open the URL printed by webpack-dev-server (port is chosen automatically).
+
+```bash
+npm run build    # production bundle → dist/
+```
 
 ---
 
@@ -73,117 +106,72 @@ The integrated editor provides tools for interacting with the rendering engine i
 
 ```
 ├── engine/
-│   ├── Renderer/    # WebGL context, shader compilation, GLSL shaders
-│   ├── MaterialSystem/       # PBR material definitions
-│   ├── LightingEngine/       # Light types and management
-│   ├── CameraSystem/         # Perspective & orthographic cameras, orbit controls
-│   ├── SceneGraph/           # Node hierarchy and transforms
-│   ├── AssetImporter/        # GLTF/GLB loader and exporter
-│   ├── EventManager/         # Input handling
-│   ├── MathLibrary/          # Vec3, Mat4, quaternions — the usual
-│   ├── GeometryPrimitives/   # Box, sphere, plane, etc.
-│   └── UserInterface/        # Editor panels and controls
+│   ├── Renderer/           # WebGL engine, shaders, buffers
+│   ├── MaterialSystem/     # PBR materials
+│   ├── LightingEngine/     # Light node types
+│   ├── CameraSystem/       # Perspective / orthographic + orbit
+│   ├── SceneGraph/         # Nodes, hierarchy, world matrices
+│   ├── MeshRenderer/       # Renderable meshes
+│   ├── AssetImporter/      # GLTF / GLB load & export
+│   ├── GeometryPrimitives/ # Built-in shapes
+│   ├── EventManager/       # Input, gizmo, picking
+│   ├── CoreUtilities/      # Commands, clipboard, autosave, factory…
+│   ├── UserInterface/      # Editor UI, ViewCube, styles
+│   ├── MathLibrary/        # gl-matrix helpers
+│   └── Textures/          # Sample textures
 ├── Showcase/
-│   └── 3DEditor/             # The editor app
-└── dist/                     # Build output
+│   └── 3DEditor/           # Editor entry (index.html + EditorApplication)
+├── images/                 # README screenshots
+└── dist/                   # Build output
 ```
 
 ---
 
-## Tech used
+## Using the engine
 
-- **TypeScript** (strict mode)
-- **WebGL** — direct API calls, no abstractions
-- **GLSL** for shaders
-- **WebGPU** (In Progress)
-- **Webpack 5** for bundling
-- **Vercel** for hosting the demo
+The full editor wires WebGL, scene, lights, shaders, and UI in:
 
----
+`Showcase/3DEditor/EditorApplication.ts`
 
-## Getting started
-
-## Requirements
-
-- Node.js v16+
-- npm
-
-## Installation
-```bash
-git clone https://github.com/Varatharajan1808/Vara3D-Graphics-Engine.git
-
-cd Vara3D-Graphics-Engine
-
-npm install
-
-npm run dev
-```
-
-Open
-
-```text
-http://localhost:8081
-```
-
-Build production version
-
-```bash
-npm run build
-```
-
----
-
-## Quick example
-
-If you want to use the engine programmatically instead of the editor:
+Core render call shape:
 
 ```typescript
-import { WebGLRenderEngine } from './engine/Renderer/Webgl/WebGLRenderEngine';
-import { SceneHierarchyManager } from './engine/SceneGraph/SceneHierarchyManager';
-import { CameraController } from './engine/CameraSystem/CameraController';
-import { RenderableMeshObject } from './engine/MeshRenderer/RenderableMeshObject';
-
-const canvas = document.getElementById('Mycanvas') as HTMLCanvasElement;
-const webgl = new WebGLRenderEngine(canvas);
-const scene = new SceneHierarchyManager();
-
-const camera = new CameraController();
-camera.PerspectiveCamera(45, canvas.width / canvas.height, 0.1, 1000);
-camera.OrbitCamera();
-
-const box = new RenderableMeshObject(new BoxGeometryBuilder().CubeData());
-scene.add(box);
-
-const animate = () => {
-  webgl.render(scene, camera);
-  requestAnimationFrame(animate);
-};
-animate();
+webgl.Render(program, camera, scene);
 ```
+
+For day-to-day use, run the editor with `npm run dev` rather than a minimal snippet — lighting, materials, and autosave are all set up there.
 
 ---
 
-## RoadMap
+## Tech stack
+
+- **TypeScript**
+- **WebGL** + **GLSL** (no high-level 3D framework)
+- **Webpack 5** (dev server + production build)
+- **fflate** (zip handling for imports)
+- **Vercel** (demo hosting)
+
+---
+
+## Roadmap
 
 - WebGPU backend
-- Shadow Mapping
-- Skeletal Animation
-- Post Processing
-- Physics Integration
-- Advanced Material Models
-- Compute Shader Support
+- Shadow mapping
+- Skeletal animation
+- Post-processing
+- Physics integration
+- Richer materials / compute paths
 
 ---
 
 ## Contact
 
-If you have questions, suggestions, or feedback, feel free to open an issue or start a discussion on GitHub.
+Questions or feedback: open an issue or discussion on GitHub.
 
-GitHub:
-https://github.com/Varatharajan1808
+**GitHub:** [github.com/Varatharajan1808](https://github.com/Varatharajan1808)
 
 ---
 
-Built with ❤️ by **Varatharajan**
+Built with care by **Varatharajan**
 
-**TypeScript • WebGL • Graphics Programming • Rendering Engine Development**
+**TypeScript · WebGL · Graphics programming · Real-time rendering**

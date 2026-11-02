@@ -136,6 +136,7 @@ function addDefaultStarterContent(): void {
   defaultLight.radius = 2.0;
   defaultLight.color = [1, 1, 1];
   defaultLight.intensity = 1.0;
+  defaultLight.updateLocalMatrix();
   scene.add(defaultLight);
 
   lightInstances.set(masterLight.uuid, { light: masterLight, type: "point", index: 0 });
@@ -1284,6 +1285,7 @@ document.getElementById("new-scene-btn")?.addEventListener("click", () => {
     defaultLight.radius = 2.0;
     defaultLight.color = [1, 1, 1];
     defaultLight.intensity = 1.0;
+    defaultLight.updateLocalMatrix();
     scene.add(defaultLight);
 
     // Reset master light to default

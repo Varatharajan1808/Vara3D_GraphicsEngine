@@ -338,14 +338,16 @@ export class IndexedDBSceneStorage {
   public static async hasSavedScene(): Promise<boolean> {
     try {
       const data = await this.loadScene();
-      return !!(data && data.nodes && data.nodes.length > 0);
+      // Empty scene (nodes: []) is still a valid saved session
+      return !!(data && Array.isArray(data.nodes));
     } catch {
       return false;
     }
   }
 
   /**
-   * Reconstruct scene objects and hierarchy from serialized state
+   * Reconstruct scene objects and hierarchy from serialized state.
+   * Empty `nodes` clears user content and keeps grid — used after delete-all + refresh.
    */
   public static async restoreScene(
     savedData: SerializedScene,
@@ -355,7 +357,7 @@ export class IndexedDBSceneStorage {
     materialFactory: PBRMaterialProperties,
     camera?: CameraController
   ): Promise<void> {
-    if (!savedData || !savedData.nodes || savedData.nodes.length === 0) return;
+    if (!savedData || !Array.isArray(savedData.nodes)) return;
 
     // 1. Clear existing user nodes and lights (keep Grid)
     const gridNodes = (scene.nodes || []).filter((n) => n.type === "Grid-Geometry");
