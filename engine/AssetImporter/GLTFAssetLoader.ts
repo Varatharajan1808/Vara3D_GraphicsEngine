@@ -514,12 +514,23 @@ export class GLTFAssetLoader {
           );
         }
 
-        // Update world matrices from root down
+        // Update world matrices from root down, then refresh mesh bounds for lighting/culling
         rootNode.updateWorldMatrix();
+        this.refreshMeshBounds(rootNode);
       } catch (err) {
         console.error(`GLTF/GLB Load Error (${url}):`, err);
         throw err;
       }
+    }
+  }
+
+  /** Walk imported tree and refresh world bounding boxes on meshes. */
+  private refreshMeshBounds(node: SceneNode): void {
+    if (node instanceof RenderableMeshObject) {
+      node.updateBoundingBox();
+    }
+    for (const child of node.children || []) {
+      this.refreshMeshBounds(child);
     }
   }
 
@@ -728,6 +739,20 @@ export class GLTFAssetLoader {
       }
     );
 
+    // Preserve glTF / primitive display name; geometry.type stays GLTF-Mesh
+    // so cube/sphere/plane/cone/cylinder all share the same import path.
+    const displayName = meshData.type;
+    if (displayName && displayName !== "GLTF-Mesh") {
+      mesh.name = displayName;
+      mesh.type = displayName;
+    }
+
+    // Keep portable URIs for re-export / autosave (constructor only accepts image elements)
+    mesh.textureURL = meshData.imageUri ?? null;
+    mesh.normalMapURL = meshData.normalMapUri ?? null;
+    if (meshData.imageUri) mesh.image = meshData.imageUri as any;
+    if (meshData.normalMapUri) mesh.normalMapImage = meshData.normalMapUri as any;
+
     // Fast bounding box setup: use accessor min/max (O(1)) if available, else loop
     const posAccessorIdx = primitive?.attributes?.POSITION;
     const posAccessor = (posAccessorIdx !== undefined && gltfData?.accessors)
@@ -759,6 +784,11 @@ export class GLTFAssetLoader {
       }
     }
     mesh.updateBoundingBox();
+    // Force GPU re-upload with imported attrs (normals/tangents/UVs)
+    mesh.normals = meshData.normals;
+    mesh.texCoord = meshData.texcoords;
+    mesh.indices = meshData.indices ?? mesh.indices;
+    mesh.geometryNeedsUpdate = true;
     return mesh;
   }
 
@@ -775,12 +805,40 @@ export class GLTFAssetLoader {
         ? pbr.baseColorFactor[3]
         : undefined;
 
+    // glTF spec defaults metallic=1 / roughness=1, which looks nearly black under
+    // point/spot lights without IBL. Keep author values when present; if a
+    // metallicRoughnessTexture exists keep factor 1 so the texture drives metal/rough.
+    // Otherwise prefer editor-friendly lit defaults for unauthored factors.
+    const hasMRTexture = !!pbr.metallicRoughnessTexture;
+    const metallic =
+      pbr.metallicFactor !== undefined
+        ? pbr.metallicFactor
+        : hasMRTexture
+          ? 1.0
+          : 0.0;
+    const roughness =
+      pbr.roughnessFactor !== undefined
+        ? pbr.roughnessFactor
+        : hasMRTexture
+          ? 1.0
+          : 0.5;
+
+    // Prefer round-trip extras; else map KHR 0–1 specularFactor → editor shininess (~16).
+    const editorSpecular = matData.extras?.varaEditorSpecular;
+    const khrSpecular =
+      matData.extensions?.KHR_materials_specular?.specularFactor;
+    let specular = 16.0;
+    if (typeof editorSpecular === "number" && Number.isFinite(editorSpecular)) {
+      specular = editorSpecular;
+    } else if (typeof khrSpecular === "number" && Number.isFinite(khrSpecular)) {
+      specular = khrSpecular > 1 ? khrSpecular : khrSpecular * 16;
+    }
+
     return {
       baseColorFactor: pbr.baseColorFactor || [1, 1, 1, 1],
-      metallic: pbr.metallicFactor ?? 1.0,
-      roughness: pbr.roughnessFactor ?? 1.0,
-      specular:
-        matData.extensions?.KHR_materials_specular?.specularFactor ?? 1.0,
+      metallic,
+      roughness,
+      specular,
       emissionColor: matData.emissiveFactor || [0, 0, 0],
       emissionIntensity:
         matData.extensions?.KHR_materials_emissive_strength?.emissiveStrength ??
@@ -807,6 +865,30 @@ export class GLTFAssetLoader {
     }
 
     return { texture, imageUri };
+  }
+
+  /** Planar UVs from XZ bounds when TEXCOORD_0 missing or wrong length. */
+  private generatePlanarUVs(positions: Float32Array): Float32Array {
+    const uvs = new Float32Array((positions.length / 3) * 2);
+    let minX = Infinity,
+      minZ = Infinity,
+      maxX = -Infinity,
+      maxZ = -Infinity;
+    for (let i = 0; i < positions.length; i += 3) {
+      const x = positions[i];
+      const z = positions[i + 2];
+      if (x < minX) minX = x;
+      if (x > maxX) maxX = x;
+      if (z < minZ) minZ = z;
+      if (z > maxZ) maxZ = z;
+    }
+    const sx = maxX - minX || 1;
+    const sz = maxZ - minZ || 1;
+    for (let i = 0, u = 0; i < positions.length; i += 3, u += 2) {
+      uvs[u] = (positions[i] - minX) / sx;
+      uvs[u + 1] = (positions[i + 2] - minZ) / sz;
+    }
+    return uvs;
   }
 
   /**
@@ -914,25 +996,43 @@ export class GLTFAssetLoader {
       primitive.attributes.POSITION,
       3
     );
-    let normals = this.getAttributeArray(
+    // Own copies — do not keep views into the GLTF ArrayBuffer
+    const positionsOwned = new Float32Array(positions);
+
+    // Always rebuild normals from positions+indices on import.
+    // File NORMAL accessors were unreliable for non-cube meshes after multi-mesh
+    // export; geometry positions stay correct and this restores lighting for
+    // cube/sphere/plane/cone/cylinder equally.
+    let normals =
+      positionsOwned.length > 0
+        ? this.generateFlatNormals(
+            positionsOwned,
+            indicesArray || undefined
+          )
+        : new Float32Array(0);
+
+    let texcoords = this.getAttributeArray(
       gltfData,
       buffers,
-      primitive.attributes.NORMAL,
-      3
+      primitive.attributes.TEXCOORD_0,
+      2
     );
-    if ((!normals || normals.length === 0) && positions.length > 0) {
-      normals = this.generateFlatNormals(positions, indicesArray || undefined);
+    const expectedUvFloats = (positionsOwned.length / 3) * 2;
+    if (
+      positionsOwned.length > 0 &&
+      (!texcoords ||
+        texcoords.length === 0 ||
+        texcoords.length !== expectedUvFloats)
+    ) {
+      texcoords = this.generatePlanarUVs(positionsOwned);
+    } else {
+      texcoords = new Float32Array(texcoords);
     }
 
     return {
-      positions,
+      positions: positionsOwned,
       normals,
-      texcoords: this.getAttributeArray(
-        gltfData,
-        buffers,
-        primitive.attributes.TEXCOORD_0,
-        2
-      ),
+      texcoords,
       tangents: this.getAttributeArray(
         gltfData,
         buffers,
@@ -1046,7 +1146,8 @@ export class GLTFAssetLoader {
 
   createGeometry(meshData: MeshData): GeometryData {
     return {
-      type: meshData.type ?? "GLTF-Mesh",
+      // Common type for all imported meshes (cube/sphere/plane/cone/cylinder)
+      type: "GLTF-Mesh",
       Vertices: meshData.positions,
       Indices: meshData.indices,
       Normals: meshData.normals,

@@ -1,11 +1,10 @@
 import { mat4, vec3, vec4, quat } from "../MathLibrary/gl-matrix";
 import { TextureCoordinates } from "../GeometryPrimitives/UVCoordinateMapper";
-import { NormalsData } from "../GeometryPrimitives/SurfaceNormalCalculator";
-import { Tangents } from "../GeometryPrimitives/TangentSpaceCalculator";
 import { RenderableMeshObject } from "../MeshRenderer/RenderableMeshObject";
 import { PBRMaterialProperties } from "../MaterialSystem/PBRMaterialProperties";
 import { SceneNode } from "../SceneGraph/SceneNode";
 import { LightNode } from "../LightingEngine/LightNode";
+import { TextureAssetLoader } from "../CoreUtilities/TextureAssetLoader";
 
 // ======================
 // Type Definitions
@@ -61,6 +60,7 @@ interface Material {
     KHR_materials_specular: { specularFactor: number };
     KHR_materials_emissive_strength: { emissiveStrength: number };
   };
+  extras?: { varaEditorSpecular?: number };
   alphaMode: "OPAQUE" | "BLEND";
   alphaCutoff: number;
   emissiveFactor: number[];
@@ -161,6 +161,7 @@ export class GLTFSceneExporter {
   private normalAccessorIndex: number | undefined;
   private texCoordAccessorIndex: number | undefined;
   private tangentAccessorIndex: number | undefined;
+  private indexAccessorIndex: number | undefined;
   private baseColorTextureIndex: number | undefined;
   private normalMapTextureIndex: number | undefined;
   private materialIndex: number | undefined;
@@ -191,6 +192,7 @@ export class GLTFSceneExporter {
     this.normalAccessorIndex = undefined;
     this.texCoordAccessorIndex = undefined;
     this.tangentAccessorIndex = undefined;
+    this.indexAccessorIndex = undefined;
     this.baseColorTextureIndex = undefined;
     this.normalMapTextureIndex = undefined;
     this.materialIndex = undefined;
@@ -213,7 +215,7 @@ export class GLTFSceneExporter {
     this.normalMapTextureMap.clear();
   }
 
-  generateGLTF(allNodes: any[]): GLTF {
+  async generateGLTF(allNodes: any[]): Promise<GLTF> {
     this.resetState();
 
     // Separate mesh nodes from group nodes
@@ -226,7 +228,7 @@ export class GLTFSceneExporter {
       // Reset per-mesh bounding box
       this.positionMin = [Infinity, Infinity, Infinity];
       this.positionMax = [-Infinity, -Infinity, -Infinity];
-      this.processMesh(mesh);
+      await this.processMesh(mesh);
     }
 
     return this.generateFinalGLTFStructure(allNodes, meshNodes);
@@ -235,24 +237,88 @@ export class GLTFSceneExporter {
   private estimateBufferSize(meshes: any[]): number {
     let totalSize = 0;
     for (const mesh of meshes) {
-      totalSize += (mesh.vertices?.length ?? 0) * 4; // Float32
-      totalSize += (mesh.normals?.length ?? NormalsData?.length ?? 0) * 4;
-      totalSize +=
-        (mesh.texCoords?.length ?? TextureCoordinates?.length ?? 0) * 4;
+      const vertLen = mesh.vertices?.length ?? 0;
+      totalSize += vertLen * 4; // Float32 positions
+      // Normals always written (live or generated) at vertex length
+      totalSize += vertLen * 4;
+      // UVs always written (matching vertex count) for textured round-trip
+      totalSize += (vertLen / 3) * 2 * 4;
       totalSize += (mesh.indices?.length ?? 0) * 2; // Uint16
+      totalSize += 4; // padding to 4-byte align after indices
     }
     return totalSize;
   }
 
-  private processMesh(mesh: any): void {
+  private async processMesh(mesh: any): Promise<void> {
+    this.positionAccessorIndex = undefined;
+    this.normalAccessorIndex = undefined;
+    this.texCoordAccessorIndex = undefined;
+    this.tangentAccessorIndex = undefined;
+    this.indexAccessorIndex = undefined;
+
     this.processPositions(mesh);
     this.processNormals(mesh);
     // this.processTangents(mesh);
     this.processTexCoords(mesh);
     this.processIndices(mesh);
-    this.processTextures(mesh);
+    this.alignByteOffset(4); // next mesh floats need 4-byte aligned offset
+    await this.processTextures(mesh);
     this.processMaterial(mesh);
     this.storeMeshInfo(mesh);
+  }
+
+  /**
+   * Embed texture sources as real data URIs (never wrap a file path as fake base64).
+   */
+  private async resolveImageToDataURL(
+    source: string | HTMLImageElement
+  ): Promise<{ uri: string; mimeType: string } | null> {
+    if (typeof source === "string") {
+      if (source.startsWith("data:")) {
+        const semi = source.indexOf(";");
+        const mimeType =
+          semi > 5 ? source.slice(5, semi) : "image/png";
+        return { uri: source, mimeType };
+      }
+      try {
+        const res = await fetch(source);
+        if (!res.ok) {
+          throw new Error(`HTTP ${res.status}`);
+        }
+        const blob = await res.blob();
+        const uri = await TextureAssetLoader.blobToDataURL(blob);
+        return { uri, mimeType: blob.type || "image/png" };
+      } catch (err) {
+        console.warn("[GLTFSceneExporter] Failed to embed texture:", source, err);
+        return null;
+      }
+    }
+
+    if (source instanceof HTMLImageElement) {
+      if (source.src?.startsWith("data:")) {
+        const semi = source.src.indexOf(";");
+        const mimeType =
+          semi > 5 ? source.src.slice(5, semi) : "image/png";
+        return { uri: source.src, mimeType };
+      }
+      if (source.src) {
+        return this.resolveImageToDataURL(source.src);
+      }
+      try {
+        const canvas = document.createElement("canvas");
+        canvas.width = source.naturalWidth || source.width || 1;
+        canvas.height = source.naturalHeight || source.height || 1;
+        const ctx = canvas.getContext("2d");
+        ctx?.drawImage(source, 0, 0);
+        const uri = canvas.toDataURL("image/png");
+        return { uri, mimeType: "image/png" };
+      } catch (err) {
+        console.warn("[GLTFSceneExporter] Canvas encode failed:", err);
+        return null;
+      }
+    }
+
+    return null;
   }
 
   private processPositions(mesh: any): Float32Array | null {
@@ -299,10 +365,11 @@ export class GLTFSceneExporter {
   }
 
   private processNormals(mesh: any): void {
-    const normalData = mesh.normals ?? NormalsData;
-    if (!normalData || normalData.length === 0) return;
+    const vertCount = mesh.vertices?.length ?? 0;
+    if (vertCount <= 0) return;
 
-    const normalBuffer = new Float32Array(normalData);
+    // Always rebuild from positions+indices for every primitive shape.
+    const normalBuffer = this.generateNormalsFromMesh(mesh);
     this.bufferViews.push({
       buffer: 0,
       byteOffset: this.byteOffset,
@@ -314,17 +381,115 @@ export class GLTFSceneExporter {
     this.accessors.push({
       bufferView: this.bufferViews.length - 1,
       componentType: 5126,
-      count: normalData.length / 3,
+      count: normalBuffer.length / 3,
       type: "VEC3",
     });
 
     this.copyToBuffer(normalBuffer);
   }
 
-  private processTexCoords(mesh: any): void {
-    const texCoordData = mesh.texCoords ?? TextureCoordinates;
-    if (!texCoordData || texCoordData.length === 0) return;
+  /** Smooth face normals from positions + indices. */
+  private generateNormalsFromMesh(mesh: any): Float32Array {
+    const positions = new Float32Array(mesh.vertices);
+    const normals = new Float32Array(positions.length);
+    const indices = mesh.indices;
 
+    if (indices && indices.length >= 3) {
+      for (let i = 0; i + 2 < indices.length; i += 3) {
+        const i0 = indices[i] * 3;
+        const i1 = indices[i + 1] * 3;
+        const i2 = indices[i + 2] * 3;
+
+        const ax = positions[i1] - positions[i0];
+        const ay = positions[i1 + 1] - positions[i0 + 1];
+        const az = positions[i1 + 2] - positions[i0 + 2];
+        const bx = positions[i2] - positions[i0];
+        const by = positions[i2 + 1] - positions[i0 + 1];
+        const bz = positions[i2 + 2] - positions[i0 + 2];
+
+        let nx = ay * bz - az * by;
+        let ny = az * bx - ax * bz;
+        let nz = ax * by - ay * bx;
+        const len = Math.hypot(nx, ny, nz);
+        if (len > 1e-5) {
+          nx /= len;
+          ny /= len;
+          nz /= len;
+        }
+
+        for (const base of [i0, i1, i2]) {
+          normals[base] += nx;
+          normals[base + 1] += ny;
+          normals[base + 2] += nz;
+        }
+      }
+
+      for (let i = 0; i < normals.length; i += 3) {
+        const len = Math.hypot(normals[i], normals[i + 1], normals[i + 2]);
+        if (len > 1e-5) {
+          normals[i] /= len;
+          normals[i + 1] /= len;
+          normals[i + 2] /= len;
+        } else {
+          normals[i + 1] = 1;
+        }
+      }
+    } else {
+      for (let i = 0; i + 8 < positions.length; i += 9) {
+        const ax = positions[i + 3] - positions[i];
+        const ay = positions[i + 4] - positions[i + 1];
+        const az = positions[i + 5] - positions[i + 2];
+        const bx = positions[i + 6] - positions[i];
+        const by = positions[i + 7] - positions[i + 1];
+        const bz = positions[i + 8] - positions[i + 2];
+
+        let nx = ay * bz - az * by;
+        let ny = az * bx - ax * bz;
+        let nz = ax * by - ay * bx;
+        const len = Math.hypot(nx, ny, nz);
+        if (len > 1e-5) {
+          nx /= len;
+          ny /= len;
+          nz /= len;
+        } else {
+          ny = 1;
+        }
+
+        for (let v = 0; v < 3; v++) {
+          normals[i + v * 3] = nx;
+          normals[i + v * 3 + 1] = ny;
+          normals[i + v * 3 + 2] = nz;
+        }
+      }
+    }
+
+    return normals;
+  }
+
+  private processTexCoords(mesh: any): void {
+    this.texCoordAccessorIndex = undefined;
+    const vertCount = (mesh.vertices?.length ?? 0) / 3;
+    if (vertCount <= 0) return;
+
+    const expectedUvFloats = vertCount * 2;
+    let texCoordData: ArrayLike<number> | null = mesh.texCoords ?? null;
+
+    // Empty typed/plain arrays are truthy — only accept matching UV length
+    if (
+      !texCoordData ||
+      (texCoordData as any).length === 0 ||
+      (texCoordData as any).length !== expectedUvFloats
+    ) {
+      if (
+        TextureCoordinates.length === expectedUvFloats
+      ) {
+        texCoordData = TextureCoordinates;
+      } else {
+        texCoordData = this.generatePlanarUVs(mesh.vertices);
+      }
+    }
+
+    // Always emit UVs so textured re-import keeps lighting-friendly albedo sampling
     const texcoordBuffer = new Float32Array(texCoordData);
     this.bufferViews.push({
       buffer: 0,
@@ -337,17 +502,49 @@ export class GLTFSceneExporter {
     this.accessors.push({
       bufferView: this.bufferViews.length - 1,
       componentType: 5126,
-      count: texCoordData.length / 2,
+      count: texcoordBuffer.length / 2,
       type: "VEC2",
     });
 
     this.copyToBuffer(texcoordBuffer);
   }
 
+  /** Planar UVs from XZ bounds (export/import fallback when UVs missing/mismatched). */
+  private generatePlanarUVs(vertices: ArrayLike<number>): Float32Array {
+    const uvs = new Float32Array((vertices.length / 3) * 2);
+    let minX = Infinity,
+      minZ = Infinity,
+      maxX = -Infinity,
+      maxZ = -Infinity;
+    for (let i = 0; i < vertices.length; i += 3) {
+      const x = vertices[i];
+      const z = vertices[i + 2];
+      if (x < minX) minX = x;
+      if (x > maxX) maxX = x;
+      if (z < minZ) minZ = z;
+      if (z > maxZ) maxZ = z;
+    }
+    const sx = maxX - minX || 1;
+    const sz = maxZ - minZ || 1;
+    for (let i = 0, u = 0; i < vertices.length; i += 3, u += 2) {
+      uvs[u] = (vertices[i] - minX) / sx;
+      uvs[u + 1] = (vertices[i + 2] - minZ) / sz;
+    }
+    return uvs;
+  }
+
   private processIndices(mesh: any): void {
     if (!mesh.indices || mesh.indices.length === 0) return;
 
-    const indexBuffer = new Uint16Array(mesh.indices);
+    let maxIndex = 0;
+    for (let i = 0; i < mesh.indices.length; i++) {
+      if (mesh.indices[i] > maxIndex) maxIndex = mesh.indices[i];
+    }
+    const useUint32 = maxIndex > 65535;
+    const indexBuffer = useUint32
+      ? new Uint32Array(mesh.indices)
+      : new Uint16Array(mesh.indices);
+
     this.bufferViews.push({
       buffer: 0,
       byteOffset: this.byteOffset,
@@ -355,9 +552,10 @@ export class GLTFSceneExporter {
       target: 34963, // ELEMENT_ARRAY_BUFFER
     });
 
+    this.indexAccessorIndex = this.accessors.length;
     this.accessors.push({
       bufferView: this.bufferViews.length - 1,
-      componentType: 5123, // UNSIGNED_SHORT
+      componentType: useUint32 ? 5125 : 5123, // UINT / USHORT
       count: mesh.indices.length,
       type: "SCALAR",
     });
@@ -365,44 +563,49 @@ export class GLTFSceneExporter {
     this.copyToBuffer(indexBuffer);
   }
 
+  /** Pad so the next bufferView (usually FLOAT attrs) starts 4-byte aligned. */
+  private alignByteOffset(alignment: number = 4): void {
+    const rem = this.byteOffset % alignment;
+    if (rem === 0) return;
+    const pad = alignment - rem;
+    if (this.bufferData) {
+      for (let i = 0; i < pad; i++) {
+        this.bufferData[this.byteOffset + i] = 0;
+      }
+    }
+    this.byteOffset += pad;
+  }
+
   private copyToBuffer(sourceArray: ArrayBufferView): void {
-    const sourceBytes = new Uint8Array(sourceArray.buffer);
+    const sourceBytes = new Uint8Array(
+      sourceArray.buffer,
+      sourceArray.byteOffset,
+      sourceArray.byteLength
+    );
     this.bufferData!.set(sourceBytes, this.byteOffset);
     this.byteOffset += sourceArray.byteLength;
   }
 
-  private processTextures(mesh: any): void {
+  private async processTextures(mesh: any): Promise<void> {
     this.baseColorTextureIndex = undefined;
     this.normalMapTextureIndex = undefined;
 
     // Use textureURL as primary source, then image
     const baseImage = mesh.textureURL || mesh.image;
 
-    if (mesh.texture && baseImage) {
-      const textureKey = `${baseImage}_${mesh.texture.version ?? "0"}`;
+    if (baseImage) {
+      const textureKey =
+        typeof baseImage === "string"
+          ? baseImage
+          : `img_${(baseImage as HTMLImageElement).src || "element"}`;
 
       if (!this.textureMap.has(textureKey)) {
-        this.baseColorTextureIndex = this.textureData.length;
-
-        let imageUri = "";
-        if (typeof baseImage === 'string') {
-          imageUri = baseImage.startsWith('data:')
-            ? baseImage
-            : `data:image/png;base64,${baseImage}`;
-        } else if (baseImage instanceof HTMLImageElement) {
-          // Fallback for HTMLImageElement if needed
-          const canvas = document.createElement("canvas");
-          canvas.width = baseImage.width;
-          canvas.height = baseImage.height;
-          const ctx = canvas.getContext("2d");
-          ctx?.drawImage(baseImage, 0, 0);
-          imageUri = canvas.toDataURL("image/png");
-        }
-
-        if (imageUri) {
+        const resolved = await this.resolveImageToDataURL(baseImage);
+        if (resolved) {
+          this.baseColorTextureIndex = this.textureData.length;
           this.images.push({
-            mimeType: "image/png",
-            uri: imageUri,
+            mimeType: resolved.mimeType,
+            uri: resolved.uri,
           });
           this.samplers.push({
             magFilter: 9729,
@@ -424,30 +627,19 @@ export class GLTFSceneExporter {
 
     const normalImage = mesh.normalMapURL || mesh.normalMapImage;
 
-    if (mesh.normalMap && normalImage) {
-      const normalMapKey = `${normalImage}_${mesh.normalMap.version ?? "0"}`;
+    if (normalImage) {
+      const normalMapKey =
+        typeof normalImage === "string"
+          ? `n:${normalImage}`
+          : `n:img_${(normalImage as HTMLImageElement).src || "element"}`;
 
       if (!this.normalMapTextureMap.has(normalMapKey)) {
-        this.normalMapTextureIndex = this.textureData.length;
-
-        let normalMapUri = "";
-        if (typeof normalImage === 'string') {
-          normalMapUri = normalImage.startsWith('data:')
-            ? normalImage
-            : `data:image/png;base64,${normalImage}`;
-        } else if (normalImage instanceof HTMLImageElement) {
-          const canvas = document.createElement("canvas");
-          canvas.width = normalImage.width;
-          canvas.height = normalImage.height;
-          const ctx = canvas.getContext("2d");
-          ctx?.drawImage(normalImage, 0, 0);
-          normalMapUri = canvas.toDataURL("image/png");
-        }
-
-        if (normalMapUri) {
+        const resolved = await this.resolveImageToDataURL(normalImage);
+        if (resolved) {
+          this.normalMapTextureIndex = this.textureData.length;
           this.images.push({
-            mimeType: "image/png",
-            uri: normalMapUri,
+            mimeType: resolved.mimeType,
+            uri: resolved.uri,
           });
           this.samplers.push({
             magFilter: 9729,
@@ -481,10 +673,17 @@ export class GLTFSceneExporter {
           : [1, 1, 1, 1]
         : undefined;
 
+    // Editor specular is a shininess-like scale (~16); glTF KHR specularFactor is 0–1.
+    const editorSpecular = mesh.specular ?? 16.0;
+    const khrSpecular =
+      editorSpecular > 1
+        ? Math.min(1, Math.max(0, editorSpecular / 64))
+        : Math.min(1, Math.max(0, editorSpecular));
+
     const material: Material = {
       pbrMetallicRoughness: {
-        metallicFactor: mesh.metallic ?? 1.0,
-        roughnessFactor: mesh.roughness ?? 1.0,
+        metallicFactor: mesh.metallic ?? 0.5,
+        roughnessFactor: mesh.roughness ?? 0.5,
         baseColorTexture:
           this.baseColorTextureIndex !== undefined
             ? {
@@ -504,11 +703,15 @@ export class GLTFSceneExporter {
       doubleSided: true,
       extensions: {
         KHR_materials_specular: {
-          specularFactor: mesh.specular ?? 1.0,
+          specularFactor: khrSpecular,
         },
         KHR_materials_emissive_strength: {
           emissiveStrength: mesh.emissionIntensity ?? 0.0,
         },
+      },
+      // Round-trip editor shininess without corrupting KHR factor
+      extras: {
+        varaEditorSpecular: editorSpecular,
       },
       alphaMode: (mesh.alpha ?? 1.0) < 1.0 ? "BLEND" : "OPAQUE",
       alphaCutoff: mesh.alpha ?? 1.0,
@@ -524,14 +727,18 @@ export class GLTFSceneExporter {
       normal: this.normalAccessorIndex,
       texCoord: this.texCoordAccessorIndex,
       tangent: this.tangentAccessorIndex,
-      indices: this.accessors.length - 1,
+      indices: this.indexAccessorIndex,
       material: this.materialIndex,
     } as GltfIndex;
   }
 
   private generateFinalGLTFStructure(allNodes: any[], meshNodes: any[]): GLTF {
-    const buffer = this.bufferData!.buffer;
-    const base64Buffer = this.bufferToBase64(buffer as ArrayBuffer);
+    // Encode only the used byte range (avoids trailing junk; keeps accessor offsets valid)
+    const used = Math.max(this.byteOffset, 0);
+    const slice = this.bufferData!.subarray(0, used);
+    const packed = new Uint8Array(used);
+    packed.set(slice);
+    const base64Buffer = this.bufferToBase64(packed.buffer);
 
     const meshesGLTF: GLTFMesh[] = meshNodes.map((mesh) => ({
       name: mesh.name,
@@ -568,7 +775,7 @@ export class GLTFSceneExporter {
       bufferViews: this.bufferViews,
       buffers: [
         {
-          byteLength: buffer.byteLength,
+          byteLength: used,
           uri: `data:application/octet-stream;base64,${base64Buffer}`,
         },
       ],
@@ -725,11 +932,12 @@ export class GLTFSceneExporter {
           uuid: node.uuid,
           name: node.name || node.type || "Mesh",
           isMesh: true,
+          // Live buffers only — same for cube/sphere/plane/cone/cylinder/GLTF
           vertices: (node.vertices ?? geometryData.Vertices) ?? [],
-          normals: geometryData.Normals ?? NormalsData ?? [],
-          texCoords: geometryData.TextureCoordinates ?? TextureCoordinates ?? [],
-          tangents: geometryData.Tangents ?? Tangents ?? [],
-          indices: geometryData.Indices ?? [],
+          normals: (node.normals ?? geometryData.Normals) ?? [],
+          texCoords: (node.texCoord ?? geometryData.TextureCoordinates) ?? [],
+          tangents: (node.tangent ?? geometryData.Tangents) ?? [],
+          indices: (node.indices ?? geometryData.Indices) ?? [],
           color: materialData.color ?? [1, 1, 1],
           metallic: materialData.metallic ?? 0.5,
           roughness: materialData.roughness ?? 0.5,
@@ -798,9 +1006,8 @@ export class GLTFSceneExporter {
     return allNodes;
   }
 
-  saveGLTF(fileName: string, meshes: any[]): void {
-    const gltf = this.generateGLTF(meshes);
-    console.log("gltf: ", gltf);
+  async saveGLTF(fileName: string, meshes: any[]): Promise<void> {
+    const gltf = await this.generateGLTF(meshes);
     const json = JSON.stringify(gltf, null, 2);
     const blob = new Blob([json], { type: "application/json" });
     const url = URL.createObjectURL(blob);

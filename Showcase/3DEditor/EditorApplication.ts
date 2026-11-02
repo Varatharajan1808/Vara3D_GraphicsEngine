@@ -1054,15 +1054,23 @@ uiManager.onTextureSelect(async (type, url) => {
           selectedObject.normalMapImage = null;
         }
       } else {
-        const textureData = await Texture.loadTextureAsync(url);
+        // Persist a real data URL so GLTF export can embed the texture
+        let persistUrl = url;
+        if (!url.startsWith("data:")) {
+          const res = await fetch(url);
+          if (!res.ok) throw new Error(`Failed to fetch texture: ${url}`);
+          const blob = await res.blob();
+          persistUrl = await TextureAssetLoader.blobToDataURL(blob);
+        }
+        const textureData = await Texture.loadTextureAsync(persistUrl);
         if (type === "texture") {
           selectedObject.texture = textureData.texture;
-          selectedObject.textureURL = textureData.base64Image || url;
-          selectedObject.image = (textureData.base64Image || url) as any;
+          selectedObject.textureURL = persistUrl;
+          selectedObject.image = persistUrl as any;
         } else {
           selectedObject.normalMap = textureData.texture;
-          selectedObject.normalMapURL = textureData.base64Image || url;
-          selectedObject.normalMapImage = (textureData.base64Image || url) as any;
+          selectedObject.normalMapURL = persistUrl;
+          selectedObject.normalMapImage = persistUrl as any;
         }
       }
       // Force update

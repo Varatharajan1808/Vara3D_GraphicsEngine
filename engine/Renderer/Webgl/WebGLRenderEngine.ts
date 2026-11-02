@@ -4,9 +4,6 @@ import { PointLightNode } from "../../LightingEngine/PointLightNode";
 import { SpotLightNode } from "../../LightingEngine/SpotLightNode";
 import { DirectionalLightNode } from "../../LightingEngine/DirectionalLightNode";
 import { CameraController } from "../../CameraSystem/CameraController";
-import { SphereGeometryBuilder } from "../../GeometryPrimitives/SphereGeometryBuilder";
-import { ConeGeometryBuilder } from "../../GeometryPrimitives/ConeGeometryBuilder";
-import { CylinderGeometryBuilder } from "../../GeometryPrimitives/CylinderGeometryBuilder";
 import {
   createElementBuffer,
   createBuffer,
@@ -197,6 +194,162 @@ export class WebGLRenderEngine {
     );
     return normalMap;
   }
+
+  /**
+   * Upload GPU attribute buffers from the mesh's own data (cube / sphere / plane /
+   * cone / cylinder / GLTF all share this path — no per-type geometry rebuild).
+   * Never paste cube-sized NormalsData/UVs onto higher-vert meshes (sphere/cylinder).
+   */
+  private ensureMeshAttributeBuffers(mesh: any): void {
+    const vertLen = mesh.vertices?.length ?? 0;
+    const uvExpected = (vertLen / 3) * 2;
+
+    const liveNormals =
+      mesh.normals &&
+      mesh.normals.length === vertLen &&
+      vertLen > 0 &&
+      this.normalsBufferLooksValid(mesh.normals)
+        ? mesh.normals
+        : null;
+    const liveUVs =
+      mesh.texCoord && mesh.texCoord.length === uvExpected && uvExpected > 0
+        ? mesh.texCoord
+        : null;
+    // Tangents must match vertex count. Empty/short buffers make
+    // normalize(aTangent)==NaN in the VS and kill lighting on non-cube meshes
+    // (only cube accidentally matched the shared Tangents[] length of 72).
+    const liveTangentsRaw =
+      mesh.tangent && mesh.tangent.length > 0
+        ? mesh.tangent
+        : mesh.tangents && mesh.tangents.length > 0
+          ? mesh.tangents
+          : null;
+    const liveTangents =
+      liveTangentsRaw &&
+      (liveTangentsRaw.length === vertLen ||
+        liveTangentsRaw.length === (vertLen / 3) * 4)
+        ? liveTangentsRaw
+        : null;
+
+    const normals =
+      liveNormals ||
+      (NormalsData.length === vertLen ? NormalsData : null) ||
+      (vertLen > 0
+        ? this.generateFallbackNormals(mesh.vertices, mesh.indices)
+        : []);
+    const uvs =
+      liveUVs ||
+      (TextureCoordinates.length === uvExpected ? TextureCoordinates : null) ||
+      (vertLen > 0 ? this.generateFallbackUVs(mesh.vertices) : []);
+    const tangents =
+      liveTangents ||
+      (Tangents.length === vertLen ? Tangents : null) ||
+      (vertLen > 0 ? this.generateFallbackTangents(vertLen / 3) : []);
+
+    if (!mesh.positionBuffer || mesh.geometryNeedsUpdate) {
+      mesh.positionBuffer = createBuffer(this.gl, mesh.vertices || []);
+    }
+    if (!mesh.indexBuffer || mesh.geometryNeedsUpdate) {
+      mesh.indexBuffer = createElementBuffer(this.gl, mesh.indices || []);
+    }
+    if (!mesh.normalBuffer || mesh.geometryNeedsUpdate) {
+      mesh.normalBuffer = createBuffer(this.gl, normals);
+    }
+    if (!mesh.textureBuffer || mesh.geometryNeedsUpdate) {
+      mesh.textureBuffer = createBuffer(this.gl, uvs);
+    }
+    if (!mesh.tangentBuffer || mesh.geometryNeedsUpdate) {
+      mesh.tangentBuffer = createBuffer(this.gl, tangents);
+    }
+  }
+
+  private normalsBufferLooksValid(normals: ArrayLike<number>): boolean {
+    let ok = 0;
+    const n = normals.length;
+    for (let i = 0; i + 2 < n; i += 3) {
+      const len = Math.hypot(normals[i], normals[i + 1], normals[i + 2]);
+      if (!Number.isFinite(len)) return false;
+      if (len > 0.5 && len < 1.5) ok++;
+    }
+    return ok * 3 >= n * 0.5;
+  }
+
+  private generateFallbackNormals(
+    vertices: ArrayLike<number>,
+    indices?: ArrayLike<number> | null
+  ): Float32Array {
+    const positions = vertices instanceof Float32Array
+      ? vertices
+      : new Float32Array(vertices as ArrayLike<number>);
+    const normals = new Float32Array(positions.length);
+    if (indices && indices.length >= 3) {
+      for (let i = 0; i + 2 < indices.length; i += 3) {
+        const i0 = indices[i] * 3;
+        const i1 = indices[i + 1] * 3;
+        const i2 = indices[i + 2] * 3;
+        const ax = positions[i1] - positions[i0];
+        const ay = positions[i1 + 1] - positions[i0 + 1];
+        const az = positions[i1 + 2] - positions[i0 + 2];
+        const bx = positions[i2] - positions[i0];
+        const by = positions[i2 + 1] - positions[i0 + 1];
+        const bz = positions[i2 + 2] - positions[i0 + 2];
+        let nx = ay * bz - az * by;
+        let ny = az * bx - ax * bz;
+        let nz = ax * by - ay * bx;
+        const len = Math.hypot(nx, ny, nz) || 1;
+        nx /= len; ny /= len; nz /= len;
+        for (const b of [i0, i1, i2]) {
+          normals[b] += nx;
+          normals[b + 1] += ny;
+          normals[b + 2] += nz;
+        }
+      }
+      for (let i = 0; i < normals.length; i += 3) {
+        const len = Math.hypot(normals[i], normals[i + 1], normals[i + 2]);
+        if (len > 1e-5) {
+          normals[i] /= len;
+          normals[i + 1] /= len;
+          normals[i + 2] /= len;
+        } else {
+          normals[i + 1] = 1;
+        }
+      }
+    } else {
+      for (let i = 0; i < normals.length; i += 3) normals[i + 1] = 1;
+    }
+    return normals;
+  }
+
+  private generateFallbackUVs(vertices: ArrayLike<number>): Float32Array {
+    const uvs = new Float32Array((vertices.length / 3) * 2);
+    let minX = Infinity, minZ = Infinity, maxX = -Infinity, maxZ = -Infinity;
+    for (let i = 0; i < vertices.length; i += 3) {
+      const x = vertices[i], z = vertices[i + 2];
+      if (x < minX) minX = x;
+      if (x > maxX) maxX = x;
+      if (z < minZ) minZ = z;
+      if (z > maxZ) maxZ = z;
+    }
+    const sx = maxX - minX || 1;
+    const sz = maxZ - minZ || 1;
+    for (let i = 0, u = 0; i < vertices.length; i += 3, u += 2) {
+      uvs[u] = (vertices[i] - minX) / sx;
+      uvs[u + 1] = (vertices[i + 2] - minZ) / sz;
+    }
+    return uvs;
+  }
+
+  /** Per-vertex vec3 tangents so VS normalize(aTangent) never gets a zero vector. */
+  private generateFallbackTangents(vertexCount: number): Float32Array {
+    const tangents = new Float32Array(vertexCount * 3);
+    for (let i = 0; i < vertexCount; i++) {
+      tangents[i * 3] = 1;
+      tangents[i * 3 + 1] = 0;
+      tangents[i * 3 + 2] = 0;
+    }
+    return tangents;
+  }
+
   setLightUniforms(program: WebGLProgram, lights: LightNode[], globalLight: any): void {
     const gl = this.gl;
     gl.useProgram(program);
@@ -495,12 +648,6 @@ export class WebGLRenderEngine {
     viewProjectionMatrix: number[],
     incrementDrawCall: () => void
   ): void {
-    const geometryMap = {
-      "Sphere-Geometry": new SphereGeometryBuilder().SphereData(),
-      "Cone-Geometry": new ConeGeometryBuilder().ConeData(2.0, 1.0, 31),
-      "Cylinder-Geometry": new CylinderGeometryBuilder().CylinderData(),
-    };
-
     // Camera uniforms are program-global — set once per frame, not per mesh
     this.gl.useProgram(program);
     this.setCameraUniforms(this.gl, program, camera);
@@ -524,31 +671,8 @@ export class WebGLRenderEngine {
       if (!mesh || (mesh.type === "Grid-Geometry" && mesh.visible === false)) return;
       if (mesh.visible === false) return;
 
-      const geometryType = mesh.geometry?.type as keyof typeof geometryMap;
-      const data = geometryMap[geometryType] || {
-        Normals: mesh.normals || NormalsData,
-        TextureCoordinates: mesh.texCoord || TextureCoordinates,
-        Tangents: mesh.tangents || Tangents,
-      };
-
-      if (!mesh.positionBuffer || mesh.geometryNeedsUpdate) {
-        mesh.positionBuffer = createBuffer(this.gl, mesh.vertices || []);
-      }
-      if (!mesh.indexBuffer || mesh.geometryNeedsUpdate) {
-        mesh.indexBuffer = createElementBuffer(this.gl, mesh.indices || []);
-      }
-      if (!mesh.normalBuffer || mesh.geometryNeedsUpdate) {
-        mesh.normalBuffer = createBuffer(this.gl, mesh.normals || data.Normals || []);
-      }
-      if (!mesh.textureBuffer || mesh.geometryNeedsUpdate) {
-        mesh.textureBuffer = createBuffer(
-          this.gl,
-          data.TextureCoordinates || []
-        );
-      }
-      if (!mesh.tangentBuffer || mesh.geometryNeedsUpdate) {
-        mesh.tangentBuffer = createBuffer(this.gl, mesh.tangent || data.Tangents || []);
-      }
+      // Common path for all primitives + GLTF: live mesh buffers only (cube-style)
+      this.ensureMeshAttributeBuffers(mesh);
       mesh.geometryNeedsUpdate = false;
 
       const worldMatrix = mesh.getWorldMatrix();
@@ -992,34 +1116,7 @@ export class WebGLRenderEngine {
   ): void {
     if (!mesh || mesh.visible === false) return;
 
-    const geometryMap = {
-      "Sphere-Geometry": new SphereGeometryBuilder().SphereData(),
-      "Cone-Geometry": new ConeGeometryBuilder().ConeData(2.0, 1.0, 31),
-      "Cylinder-Geometry": new CylinderGeometryBuilder().CylinderData(),
-    };
-
-    const geometryType = mesh.geometry?.type as keyof typeof geometryMap;
-    const data = geometryMap[geometryType] || {
-      Normals: mesh.normals || NormalsData,
-      TextureCoordinates: mesh.texCoord || TextureCoordinates,
-      Tangents: mesh.tangents || Tangents,
-    };
-
-    if (!mesh.positionBuffer || mesh.geometryNeedsUpdate) {
-      mesh.positionBuffer = createBuffer(this.gl, mesh.vertices || []);
-    }
-    if (!mesh.indexBuffer || mesh.geometryNeedsUpdate) {
-      mesh.indexBuffer = createElementBuffer(this.gl, mesh.indices || []);
-    }
-    if (!mesh.normalBuffer || mesh.geometryNeedsUpdate) {
-      mesh.normalBuffer = createBuffer(this.gl, mesh.normals || data.Normals || []);
-    }
-    if (!mesh.textureBuffer || mesh.geometryNeedsUpdate) {
-      mesh.textureBuffer = createBuffer(this.gl, mesh.texCoord || data.TextureCoordinates || []);
-    }
-    if (!mesh.tangentBuffer || mesh.geometryNeedsUpdate) {
-      mesh.tangentBuffer = createBuffer(this.gl, data.Tangents || []);
-    }
+    this.ensureMeshAttributeBuffers(mesh);
     mesh.geometryNeedsUpdate = false;
 
     if (!mesh.isGizmoPart) {

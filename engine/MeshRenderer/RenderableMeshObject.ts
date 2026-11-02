@@ -23,7 +23,7 @@ interface BoundingBox {
 export class RenderableMeshObject extends SceneNode {
   geometry: any;
   vertices: Float32Array | number[];
-  indices: Uint16Array | number[];
+  indices: Uint16Array | Uint32Array | number[];
   texCoord: Float32Array | number[] | null;
   tangent: Float32Array | number[] | null;
   normals: Float32Array | number[] | null;
@@ -82,9 +82,41 @@ export class RenderableMeshObject extends SceneNode {
     this.indices = Indices;
     this.type = type || "Mesh";
 
-    this.texCoord = geometry.TextureCoordinates ?? TextureCoordinates ?? null;
-    this.tangent = geometry.Tangents ?? Tangents ?? null;
-    this.normals = geometry.Normals ?? NormalsData ?? null;
+    // Only use cube shared fallbacks when length matches this mesh (sphere/cylinder ≠ 24 verts)
+    const vertLen = (Vertices && Vertices.length) || 0;
+    const uvLen = (vertLen / 3) * 2;
+    const geoUVs = geometry.TextureCoordinates;
+    this.texCoord =
+      geoUVs && geoUVs.length === uvLen
+        ? geoUVs
+        : TextureCoordinates.length === uvLen
+          ? TextureCoordinates
+          : geoUVs && geoUVs.length > 0
+            ? geoUVs
+            : null;
+    const geoTangents = geometry.Tangents;
+    // Must match vertex count — shared cube Tangents[] is only valid for 24 verts.
+    // Wrong/empty tangents → VS normalize(0)=NaN → unlit sphere/cylinder/plane/cone.
+    if (geoTangents && (geoTangents.length === vertLen || geoTangents.length === (vertLen / 3) * 4)) {
+      this.tangent = geoTangents;
+    } else if (Tangents.length === vertLen || Tangents.length === (vertLen / 3) * 4) {
+      this.tangent = Tangents;
+    } else if (vertLen > 0) {
+      const t = new Float32Array(vertLen);
+      for (let i = 0; i < vertLen; i += 3) t[i] = 1;
+      this.tangent = t;
+    } else {
+      this.tangent = null;
+    }
+    const geoNormals = geometry.Normals;
+    this.normals =
+      geoNormals && geoNormals.length === vertLen
+        ? geoNormals
+        : NormalsData.length === vertLen
+          ? NormalsData
+          : geoNormals && geoNormals.length > 0
+            ? geoNormals
+            : null;
     this.material = material ?? new PBRMaterialProperties();
 
     this.texture = (texture as any)?.texture ?? texture ?? null;

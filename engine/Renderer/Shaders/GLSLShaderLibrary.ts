@@ -152,7 +152,9 @@ export const UnifiedLightvsShader: WebGLShader = `
         vTextureCoord = aTextureCoord;
 
         vNormal = normalize(mat3(u_modelMatrix) * aVertexNormal);
-        vTangent = normalize(mat3(u_modelMatrix) * aTangent);
+        // Avoid normalize(0)=NaN when tangent buffer is missing/short (non-cube meshes)
+        vec3 tRaw = mat3(u_modelMatrix) * aTangent;
+        vTangent = dot(tRaw, tRaw) > 1e-10 ? normalize(tRaw) : vec3(1.0, 0.0, 0.0);
         vBitangent = cross(vNormal, vTangent);
     }
 `;

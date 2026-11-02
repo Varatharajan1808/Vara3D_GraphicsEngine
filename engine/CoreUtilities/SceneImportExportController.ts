@@ -1,7 +1,12 @@
 import { SceneHierarchyManager } from "../SceneGraph/SceneHierarchyManager";
+import { SceneNode } from "../SceneGraph/SceneNode";
 import { GLTFAssetLoader } from "../AssetImporter/GLTFAssetLoader";
 import { GLTFSceneExporter } from "../AssetImporter/GLTFSceneExporter";
 import { ZipArchiveLoader } from "./ZipArchiveLoader";
+import { PointLightNode } from "../LightingEngine/PointLightNode";
+import { SpotLightNode } from "../LightingEngine/SpotLightNode";
+import { DirectionalLightNode } from "../LightingEngine/DirectionalLightNode";
+import { RenderableMeshObject } from "../MeshRenderer/RenderableMeshObject";
 
 export interface SceneImportExportUI {
   showAlert(title: string, message?: string): void;
@@ -75,12 +80,18 @@ export class SceneImportExportController {
 
     const url = URL.createObjectURL(gltfFile);
     try {
+      const { scene } = this.deps;
       await loader.main([url], fileMap);
+      if (loader.lastImportedRoot) {
+        this.fitSceneLightsToModel(scene, loader.lastImportedRoot);
+        // Select first mesh so Material inspector shows (Model group has none)
+        selectSingleObject(
+          this.findFirstRenderableMesh(loader.lastImportedRoot) ??
+            loader.lastImportedRoot
+        );
+      }
       updateSceneGraph();
       triggerAutoSave();
-      if (loader.lastImportedRoot) {
-        selectSingleObject(loader.lastImportedRoot);
-      }
       uiManager.showToast?.(
         `Imported ${gltfFile.name}`,
         { type: "success" }
@@ -93,6 +104,56 @@ export class SceneImportExportController {
       );
     } finally {
       URL.revokeObjectURL(url);
+    }
+  }
+
+  /**
+   * Ensure point/spot/dir lights cover the imported model (same UnifiedLight path as primitives).
+   * Scales point radius / boosts intensity; adds a light if the scene has none.
+   */
+  private fitSceneLightsToModel(scene: SceneHierarchyManager, root: SceneNode): void {
+    const box = root.getBoundingBox();
+    let cx = 0;
+    let cy = 2;
+    let cz = 0;
+    let size = 4;
+    if (box) {
+      cx = (box.min[0] + box.max[0]) * 0.5;
+      cy = (box.min[1] + box.max[1]) * 0.5;
+      cz = (box.min[2] + box.max[2]) * 0.5;
+      size = Math.max(
+        box.max[0] - box.min[0],
+        box.max[1] - box.min[1],
+        box.max[2] - box.min[2],
+        0.5
+      );
+    }
+    const fitRadius = Math.max(size * 2, 8);
+    const fitIntensity = Math.max(1.25, size * 0.15);
+
+    if (!scene.lights || scene.lights.length === 0) {
+      const pt = new PointLightNode("Point Light");
+      pt.position = { x: cx, y: cy + size * 0.75, z: cz + size * 0.75 };
+      pt.radius = fitRadius;
+      pt.intensity = fitIntensity;
+      pt.color = [1, 1, 1];
+      pt.updateLocalMatrix();
+      scene.add(pt);
+      return;
+    }
+
+    for (const light of scene.lights) {
+      if (light instanceof PointLightNode) {
+        if (light.radius < fitRadius) light.radius = fitRadius;
+        if (light.intensity < fitIntensity) light.intensity = fitIntensity;
+        light.updateLocalMatrix();
+      } else if (light instanceof SpotLightNode) {
+        if (light.intensity < fitIntensity) light.intensity = fitIntensity;
+        // Widen reach for large imports by keeping cone but ensuring position matrix is current
+        light.updateLocalMatrix();
+      } else if (light instanceof DirectionalLightNode) {
+        if (light.intensity < 1.0) light.intensity = 1.0;
+      }
     }
   }
 
@@ -155,11 +216,11 @@ export class SceneImportExportController {
     return fileList;
   }
 
-  exportScene(fileName: string = "exported_scene"): void {
+  async exportScene(fileName: string = "exported_scene"): Promise<void> {
     try {
       const gltfExport = new GLTFSceneExporter();
       const gltf = gltfExport.exportSceneToGLTF(this.deps.scene);
-      gltfExport.saveGLTF(fileName, gltf);
+      await gltfExport.saveGLTF(fileName, gltf);
       this.deps.uiManager.showToast?.("Scene exported", { type: "success" });
     } catch (error) {
       console.error("Error exporting scene:", error);
@@ -168,5 +229,14 @@ export class SceneImportExportController {
         `Failed to export scene: ${(error as Error).message}`
       );
     }
+  }
+
+  private findFirstRenderableMesh(root: SceneNode): RenderableMeshObject | null {
+    if (root instanceof RenderableMeshObject) return root;
+    for (const child of root.children ?? []) {
+      const found = this.findFirstRenderableMesh(child);
+      if (found) return found;
+    }
+    return null;
   }
 }
