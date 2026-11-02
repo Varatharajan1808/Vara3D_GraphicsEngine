@@ -55,6 +55,12 @@ export interface SerializedNode {
   angle?: number;
 }
 
+export interface CameraOrbitState {
+  rotationX: number;
+  rotationY: number;
+  radius: number;
+}
+
 export interface SerializedScene {
   version: number;
   timestamp: number;
@@ -62,6 +68,9 @@ export interface SerializedScene {
   camera?: {
     eye: { x: number; y: number; z: number };
     center?: { x: number; y: number; z: number };
+    rotationX?: number;
+    rotationY?: number;
+    radius?: number;
   };
 }
 
@@ -105,7 +114,8 @@ export class IndexedDBSceneStorage {
    */
   public static serializeScene(
     scene: SceneHierarchyManager,
-    camera?: CameraController
+    camera?: CameraController,
+    orbit?: CameraOrbitState
   ): SerializedScene {
     const serializedNodes: SerializedNode[] = [];
 
@@ -245,6 +255,9 @@ export class IndexedDBSceneStorage {
             center: camera.center
               ? { x: camera.center.x, y: camera.center.y, z: camera.center.z }
               : undefined,
+            rotationX: orbit?.rotationX,
+            rotationY: orbit?.rotationY,
+            radius: orbit?.radius,
           }
         : undefined,
     };
@@ -255,10 +268,11 @@ export class IndexedDBSceneStorage {
    */
   public static async saveScene(
     scene: SceneHierarchyManager,
-    camera?: CameraController
+    camera?: CameraController,
+    orbit?: CameraOrbitState
   ): Promise<void> {
     try {
-      const serialized = this.serializeScene(scene, camera);
+      const serialized = this.serializeScene(scene, camera, orbit);
       const db = await this.openDB();
       return new Promise((resolve, reject) => {
         const tx = db.transaction(this.STORE_NAME, "readwrite");

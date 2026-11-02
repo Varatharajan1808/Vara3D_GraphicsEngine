@@ -95,6 +95,8 @@ export class SceneInteractionHandler {
   selectedVertices: number[] = [];
   originalVertexPositions: number[] = [];
   isDirectDragging: boolean = false;
+  /** Local-space unit normal of the currently selected face (face edit Shift+drag lock). */
+  selectedFaceNormal: Vec3 | null = null;
   onSelect?: (uuid: string | null) => void;
   onMultiSelect?: (uuids: string[]) => void;
   onDelete?: (uuid: string) => void;
@@ -108,6 +110,8 @@ export class SceneInteractionHandler {
     prevVertices: number[],
     newVertices: number[]
   ) => void;
+  /** Fired after camera orbit/pan/zoom gesture ends (for autosave). */
+  onViewChange?: () => void;
   transformStartSnapshots: ObjectTransformSnapshot[] = [];
   isMarqueeMode: boolean = false;
   isMarqueeSelecting: boolean = false;
@@ -244,36 +248,8 @@ export class SceneInteractionHandler {
             this.gizmo.setMode("scale");
           }
           break;
-        case "delete":
-        case "backspace":
-          if (this.onDeleteNodes) {
-            const toDelete = this.select.length > 0 ? [...this.select] : (this.selectedObject ? [this.selectedObject] : []);
-            const valid = toDelete.filter(o => o.type !== "Grid-Geometry");
-            if (valid.length > 0) {
-              this.onDeleteNodes(valid);
-            }
-          } else if (this.select && this.select.length > 0) {
-            const toDelete = [...this.select];
-            for (const obj of toDelete) {
-              if (obj.type === "Grid-Geometry") continue;
-              const uuid = obj.uuid;
-              this.scene.remove(obj);
-              if (this.onDelete && uuid) {
-                this.onDelete(uuid);
-              }
-            }
-            this.deselectObject();
-          } else if (this.selectedObject) {
-            if (this.selectedObject.type !== "Grid-Geometry") {
-              const uuid = this.selectedObject.uuid;
-              this.scene.remove(this.selectedObject);
-              if (this.onDelete && uuid) {
-                this.onDelete(uuid);
-              }
-            }
-            this.deselectObject();
-          }
-          break;
+        // Delete / Backspace: handled only in EditorApplication (confirm → deleteObjectFromScene)
+        // so scene + scene-graph stay in sync. Do not delete here.
         case "escape":
           this.deselectObject();
           break;
@@ -296,6 +272,95 @@ export class SceneInteractionHandler {
       }
     });
   }
+  /**
+   * Edit-mode sub-element pick (screen-space vertex/edge, ray face).
+   * Runs BEFORE mesh raycast so corner vertex clicks don't fall through as empty space.
+   * @returns true if a sub-element was selected and the click was handled
+   */
+  private trySelectEditSubElement(event: MouseEvent): boolean {
+    const mesh = this.selectedObject;
+    if (!mesh || this.editorMode !== "edit") return false;
+
+    this.setupRay(this.mouseX, this.mouseY);
+
+    if (this.editSubMode === "vertex") {
+      let clickedVertexIndex = mesh.hoveredVertexIndex;
+      if (clickedVertexIndex === undefined || clickedVertexIndex === null) {
+        const res = this.checkVertexIntersections(mesh);
+        clickedVertexIndex = res !== null ? res : undefined;
+      }
+      if (clickedVertexIndex === null || clickedVertexIndex === undefined) {
+        return false;
+      }
+
+      mesh.selectedVertexIndex = clickedVertexIndex;
+      mesh.selectedEdgeVertices = undefined;
+      mesh.highlightedFace = undefined;
+      this.selectedFaceNormal = null;
+      this.selectedVertices = this.getMatchingVertices(mesh, [clickedVertexIndex]);
+      this.originalVertexPositions = [...(mesh.vertices as number[])];
+      this.isDirectDragging = true;
+      if (this.gizmo) this.gizmo.visible = false;
+      this.dragStartPosition = { x: event.clientX, y: event.clientY };
+      return true;
+    }
+
+    if (this.editSubMode === "edge") {
+      let clickedEdge = mesh.hoveredEdgeVertices;
+      if (clickedEdge === undefined || clickedEdge === null) {
+        const res = this.checkEdgeIntersections(mesh);
+        clickedEdge = res !== null ? res : undefined;
+      }
+      if (clickedEdge === null || clickedEdge === undefined) {
+        return false;
+      }
+
+      mesh.selectedEdgeVertices = clickedEdge;
+      mesh.selectedVertexIndex = undefined;
+      mesh.highlightedFace = undefined;
+      this.selectedFaceNormal = null;
+      this.selectedVertices = this.getMatchingVertices(mesh, clickedEdge);
+      this.originalVertexPositions = [...(mesh.vertices as number[])];
+      this.isDirectDragging = true;
+      if (this.gizmo) this.gizmo.visible = false;
+      this.dragStartPosition = { x: event.clientX, y: event.clientY };
+      return true;
+    }
+
+    if (this.editSubMode === "face") {
+      let clickedFaceIndices = mesh.hoveredFace;
+      if (clickedFaceIndices === undefined || clickedFaceIndices === null) {
+        const clickedFaceResult = this.checkFaceIntersections(mesh);
+        if (clickedFaceResult !== null) {
+          clickedFaceIndices = clickedFaceResult.vertexIndices;
+        }
+      }
+      if (clickedFaceIndices === null || clickedFaceIndices === undefined) {
+        return false;
+      }
+
+      mesh.highlightedFace = clickedFaceIndices;
+      mesh.selectedVertexIndex = undefined;
+      mesh.selectedEdgeVertices = undefined;
+      this.selectedVertices = this.getMatchingVertices(mesh, clickedFaceIndices);
+      this.originalVertexPositions = [...(mesh.vertices as number[])];
+      this.selectedFaceNormal =
+        clickedFaceIndices.length >= 3
+          ? this.calculateTriangleNormal(mesh.vertices as number[], [
+              clickedFaceIndices[0],
+              clickedFaceIndices[1],
+              clickedFaceIndices[2],
+            ])
+          : null;
+      this.isDirectDragging = true;
+      if (this.gizmo) this.gizmo.visible = false;
+      this.dragStartPosition = { x: event.clientX, y: event.clientY };
+      return true;
+    }
+
+    return false;
+  }
+
   rayEvents(): void {
     this.canvas.addEventListener("mousedown", (event: MouseEvent) => {
       if (event.button === 2) {
@@ -306,6 +371,15 @@ export class SceneInteractionHandler {
       const mousePos = this.getNormalizedMousePos(this.canvas, event);
       this.mouseX = mousePos.x;
       this.mouseY = mousePos.y;
+
+      // Edit mode: pick vertex/edge/face on the selected mesh BEFORE mesh raycast
+      // so corner handles don't register as empty space and deselect the object.
+      if (this.editorMode === "edit" && this.selectedObject) {
+        if (this.trySelectEditSubElement(event)) {
+          return;
+        }
+      }
+
       const selectObject = this.performRaycasting();
       const clickedObject = selectObject?.[0];
       const intersection = this.checkIntersections();
@@ -316,6 +390,7 @@ export class SceneInteractionHandler {
           this.activeAxis = clickedObject.axis as Axis;
           this.isObjectSelected = true;
           this.isGizmoInteraction = true;
+          this.webgl.isGizmoDragging = true;
 
           // Capture start transform snapshots for undo/redo
           const targetObjects = this.select.length > 0 ? this.select : (this.selectedObject ? [this.selectedObject] : []);
@@ -392,102 +467,16 @@ export class SceneInteractionHandler {
           }
           return;
         } else {
-          // If in Edit Mode and clicking the currently selected object, select sub-elements
-          if (this.editorMode === 'edit' && clickedObject === this.selectedObject) {
-            if (this.editSubMode === 'vertex') {
-              let clickedVertexIndex = clickedObject.hoveredVertexIndex;
-              if (clickedVertexIndex === undefined || clickedVertexIndex === null) {
-                const res = this.checkVertexIntersections(clickedObject);
-                clickedVertexIndex = res !== null ? res : undefined;
-              }
-              if (clickedVertexIndex !== null && clickedVertexIndex !== undefined) {
-                clickedObject.selectedVertexIndex = clickedVertexIndex !== null ? clickedVertexIndex : undefined;
-                clickedObject.selectedEdgeVertices = undefined;
-                clickedObject.highlightedFace = undefined;
-
-                this.selectedVertices = this.getMatchingVertices(clickedObject, [clickedVertexIndex]);
-                this.originalVertexPositions = [...(clickedObject.vertices as number[])];
-                this.isDirectDragging = true;
-
-                if (this.gizmo) {
-                  this.gizmo.visible = false;
-                }
-              } else {
-                // Clear selection
-                clickedObject.selectedVertexIndex = undefined;
-                this.selectedVertices = [];
-                this.isDirectDragging = false;
-                if (this.gizmo) this.gizmo.visible = false;
-              }
-            } else if (this.editSubMode === 'edge') {
-              let clickedEdge = clickedObject.hoveredEdgeVertices;
-              if (clickedEdge === undefined || clickedEdge === null) {
-                const res = this.checkEdgeIntersections(clickedObject);
-                clickedEdge = res !== null ? res : undefined;
-              }
-              if (clickedEdge !== null && clickedEdge !== undefined) {
-                clickedObject.selectedEdgeVertices = clickedEdge !== null ? clickedEdge : undefined;
-                clickedObject.selectedVertexIndex = undefined;
-                clickedObject.highlightedFace = undefined;
-
-                this.selectedVertices = this.getMatchingVertices(clickedObject, clickedEdge);
-                this.originalVertexPositions = [...(clickedObject.vertices as number[])];
-                this.isDirectDragging = true;
-
-                if (this.gizmo) {
-                  this.gizmo.visible = false;
-                }
-              } else {
-                clickedObject.selectedEdgeVertices = undefined;
-                this.selectedVertices = [];
-                this.isDirectDragging = false;
-                if (this.gizmo) this.gizmo.visible = false;
-              }
-            } else if (this.editSubMode === 'face') {
-              let clickedFaceIndices = clickedObject.hoveredFace;
-              if (clickedFaceIndices === undefined || clickedFaceIndices === null) {
-                const clickedFaceResult = this.checkFaceIntersections(clickedObject);
-                if (clickedFaceResult !== null) {
-                  clickedFaceIndices = clickedFaceResult.vertexIndices;
-                }
-              }
-              if (clickedFaceIndices !== null && clickedFaceIndices !== undefined) {
-                clickedObject.highlightedFace = clickedFaceIndices;
-                clickedObject.selectedVertexIndex = undefined;
-                clickedObject.selectedEdgeVertices = undefined;
-
-                this.selectedVertices = this.getMatchingVertices(clickedObject, clickedFaceIndices);
-                this.originalVertexPositions = [...(clickedObject.vertices as number[])];
-
-                // Position gizmo at centroid
-                const vertices = clickedObject.vertices;
-                const centroid = [0, 0, 0];
-                for (const idx of clickedFaceIndices) {
-                  centroid[0] += vertices[idx * 3];
-                  centroid[1] += vertices[idx * 3 + 1];
-                  centroid[2] += vertices[idx * 3 + 2];
-                }
-                const count = clickedFaceIndices.length;
-                const localCentroid = [centroid[0] / count, centroid[1] / count, centroid[2] / count];
-                const worldCentroid = vec3.create();
-                vec3.transformMat4(worldCentroid, localCentroid, clickedObject.getWorldMatrix());
-
-                if (this.gizmo) {
-                  this.gizmo.position.x = worldCentroid[0];
-                  this.gizmo.position.y = worldCentroid[1];
-                  this.gizmo.position.z = worldCentroid[2];
-                  this.gizmo.visible = true;
-                  if (!this.gizmo.gizmoMeshes.length) {
-                    this.gizmo.addToScene(this.scene);
-                  }
-                  this.gizmo.updateLocalMatrix();
-                }
-              } else {
-                clickedObject.highlightedFace = undefined;
-                this.selectedVertices = [];
-                if (this.gizmo) this.gizmo.visible = false;
-              }
-            }
+          // Edit mode + click on selected mesh body (no vertex/edge hit above):
+          // clear sub-selection only — do not fall through to object re-select churn
+          if (this.editorMode === "edit" && clickedObject === this.selectedObject) {
+            clickedObject.selectedVertexIndex = undefined;
+            clickedObject.selectedEdgeVertices = undefined;
+            clickedObject.highlightedFace = undefined;
+            this.selectedFaceNormal = null;
+            this.selectedVertices = [];
+            this.isDirectDragging = false;
+            if (this.gizmo) this.gizmo.visible = false;
             this.dragStartPosition = { x: event.clientX, y: event.clientY };
             return;
           }
@@ -589,9 +578,19 @@ export class SceneInteractionHandler {
           return;
         }
       } else {
-        // Clicked on empty space - clear selections unless Ctrl/Shift/Marquee active
+        // Empty space: in edit mode keep the object selected, only clear sub-element picks
         if (!event.ctrlKey && !event.shiftKey && !event.metaKey && !this.isMarqueeMode) {
-          this.deselectObject();
+          if (this.editorMode === "edit" && this.selectedObject) {
+            this.selectedObject.selectedVertexIndex = undefined;
+            this.selectedObject.selectedEdgeVertices = undefined;
+            this.selectedObject.highlightedFace = undefined;
+            this.selectedFaceNormal = null;
+            this.selectedVertices = [];
+            this.isDirectDragging = false;
+            if (this.gizmo) this.gizmo.visible = false;
+          } else {
+            this.deselectObject();
+          }
         }
       }
     });
@@ -629,6 +628,7 @@ export class SceneInteractionHandler {
     });
     this.selectedVertices = [];
     this.originalVertexPositions = [];
+    this.selectedFaceNormal = null;
     this.isDirectDragging = false;
     this.isObjectSelected = false;
     this.selectedObject = null;
@@ -639,6 +639,7 @@ export class SceneInteractionHandler {
 
     this.activeAxis = null;
     this.isGizmoInteraction = false;
+    this.webgl.isGizmoDragging = false;
     this.isRotationMode = false;
     this.isScaleMode = false;
     this.isTransformationActive = false;
@@ -676,6 +677,7 @@ export class SceneInteractionHandler {
         this.camera.eye = { x: pos[0], y: pos[1], z: pos[2] };
         this.camera.OrbitCamera();
       }
+      if (this.onViewChange) this.onViewChange();
     });
     this.canvas.addEventListener("pointerdown", (e: PointerEvent) => {
       this.move = true;
@@ -748,12 +750,12 @@ export class SceneInteractionHandler {
         return;
       }
 
-      // Direct vertex/edge dragging
+      // Direct vertex/edge/face dragging
       if (this.isDirectDragging && this.selectedObject && this.selectedVertices.length > 0) {
         e.preventDefault();
         const deltaX = e.clientX - this.dragStartPosition.x;
         const deltaY = e.clientY - this.dragStartPosition.y;
-        this.handleDirectSubElementTranslation(deltaX, deltaY);
+        this.handleDirectSubElementTranslation(deltaX, deltaY, e.shiftKey);
         return;
       }
 
@@ -850,6 +852,7 @@ export class SceneInteractionHandler {
       }
       this.move = false;
       this.isGizmoInteraction = false;
+      this.webgl.isGizmoDragging = false;
       this.isTransformationActive = false;
       this.isDirectDragging = false;
 
@@ -903,6 +906,11 @@ export class SceneInteractionHandler {
           y: this.selectedObject.rotate.y,
           z: this.selectedObject.rotate.z,
         };
+      }
+
+      // Persist camera view after orbit / pan / zoom
+      if (this.hasDragged && this.onViewChange) {
+        this.onViewChange();
       }
     });
   }
@@ -1974,17 +1982,8 @@ export class SceneInteractionHandler {
     }
   }
   controlEvent(): number[] {
-    // Only update gizmo position during active gizmo interaction (dragging),
-    // not every frame — avoids expensive getBoundingBox() calls 60x/sec
-    if (this.isObjectSelected && this.gizmo && this.isGizmoInteraction) {
-      if (this.editorMode !== 'edit' || this.selectedVertices.length === 0) {
-        if (this.select && this.select.length > 1) {
-          this.updateGizmoPositionForMultiSelection();
-        } else if (this.selectedObject) {
-          this.updateGizmoPosition(this.selectedObject);
-        }
-      }
-    }
+    // Gizmo position is updated in handleTranslation / handleRotation / handleScaling
+    // during pointermove — do not re-run getBoundingBox here every animate frame.
     const cameraAngleX = ((this.rotationX * this.sensitivity) / 180) * Math.PI;
     const cameraAngleY = ((this.rotationY * this.sensitivity) / 180) * Math.PI;
     const cameraX =
@@ -1997,34 +1996,69 @@ export class SceneInteractionHandler {
 
   // --- EDIT MODE HELPER METHODS ---
 
+  /** Project world point to canvas pixels; null if behind camera. */
+  private worldToCanvasPixel(
+    x: number,
+    y: number,
+    z: number
+  ): { x: number; y: number; depth: number } | null {
+    const vec = vec4.fromValues(x, y, z, 1);
+    const viewProjection = mat4.create();
+    mat4.multiply(
+      viewProjection,
+      this.camera.projectionMatrix,
+      this.camera.viewMatrix
+    );
+    vec4.transformMat4(vec, vec, viewProjection);
+    if (vec[3] <= 0.0001) return null;
+    const ndcX = vec[0] / vec[3];
+    const ndcY = vec[1] / vec[3];
+    const width = this.canvas.clientWidth || this.canvas.width;
+    const height = this.canvas.clientHeight || this.canvas.height;
+    return {
+      x: ((ndcX + 1) / 2) * width,
+      y: ((1 - ndcY) / 2) * height,
+      depth: vec[3],
+    };
+  }
+
+  private getMouseCanvasPixel(): { x: number; y: number } {
+    const width = this.canvas.clientWidth || this.canvas.width;
+    const height = this.canvas.clientHeight || this.canvas.height;
+    return {
+      x: ((this.mouseX + 1) / 2) * width,
+      y: ((1 - this.mouseY) / 2) * height,
+    };
+  }
+
   checkVertexIntersections(mesh: RenderableMeshObject): number | null {
     const vertices = mesh.vertices || [];
     const modelMatrix = mesh.getWorldMatrix();
-    let closestT = Infinity;
+    const mouse = this.getMouseCanvasPixel();
+    // Match ~gl_PointSize (10px) with a small pad — screen-space, not world units
+    const pickRadiusPx = 14;
+    let closestDist = Infinity;
     let closestVertexIndex = -1;
-    const threshold = Math.max(0.4, this.cameraRadiuscam * 0.06);
+    let closestDepth = Infinity;
+
+    const worldPos = vec3.create();
 
     for (let i = 0; i < vertices.length; i += 3) {
       const localPos = vec3.fromValues(vertices[i], vertices[i + 1], vertices[i + 2]);
-      const worldPos = vec3.create();
       vec3.transformMat4(worldPos, localPos, modelMatrix);
+      const pixel = this.worldToCanvasPixel(worldPos[0], worldPos[1], worldPos[2]);
+      if (!pixel) continue;
 
-      const w = vec3.create();
-      vec3.subtract(w, worldPos, this.rayOrigin as any);
-      const proj = vec3.dot(w, this.rayDirection as any);
-      
-      if (proj >= 0) {
-        const closestPointOnRay = vec3.fromValues(
-          this.rayOrigin[0] + this.rayDirection[0] * proj,
-          this.rayOrigin[1] + this.rayDirection[1] * proj,
-          this.rayOrigin[2] + this.rayDirection[2] * proj
-        );
-        const dist = vec3.distance(worldPos, closestPointOnRay);
-        
-        if (dist < threshold && proj < closestT) {
-          closestT = proj;
-          closestVertexIndex = i / 3;
-        }
+      const dist = Math.hypot(pixel.x - mouse.x, pixel.y - mouse.y);
+      if (dist > pickRadiusPx) continue;
+      // Prefer nearer cursor; near-ties prefer nearer camera
+      if (
+        dist < closestDist - 0.25 ||
+        (Math.abs(dist - closestDist) <= 0.25 && pixel.depth < closestDepth)
+      ) {
+        closestDist = dist;
+        closestDepth = pixel.depth;
+        closestVertexIndex = i / 3;
       }
     }
 
@@ -2037,9 +2071,11 @@ export class SceneInteractionHandler {
     if (!indices || !vertices) return null;
 
     const modelMatrix = mesh.getWorldMatrix();
-    let closestT = Infinity;
+    const mouse = this.getMouseCanvasPixel();
+    const pickRadiusPx = 12;
+    let closestDist = Infinity;
     let closestEdge: number[] | null = null;
-    const threshold = Math.max(0.4, this.cameraRadiuscam * 0.06);
+    let closestDepth = Infinity;
 
     const getPosKey = (idx: number) => {
       const x = vertices[idx * 3];
@@ -2065,37 +2101,49 @@ export class SceneInteractionHandler {
       }
     }
 
+    const worldA = vec3.create();
+    const worldB = vec3.create();
+
     for (const edge of edgeMap.values()) {
-      const pA = vec3.fromValues(vertices[edge.v1 * 3], vertices[edge.v1 * 3 + 1], vertices[edge.v1 * 3 + 2]);
-      const pB = vec3.fromValues(vertices[edge.v2 * 3], vertices[edge.v2 * 3 + 1], vertices[edge.v2 * 3 + 2]);
-      
-      const worldA = vec3.create();
-      vec3.transformMat4(worldA, pA, modelMatrix);
-      const worldB = vec3.create();
-      vec3.transformMat4(worldB, pB, modelMatrix);
-
-      const worldMid = vec3.fromValues(
-        (worldA[0] + worldB[0]) / 2,
-        (worldA[1] + worldB[1]) / 2,
-        (worldA[2] + worldB[2]) / 2
+      const localA = vec3.fromValues(
+        vertices[edge.v1 * 3],
+        vertices[edge.v1 * 3 + 1],
+        vertices[edge.v1 * 3 + 2]
       );
+      const localB = vec3.fromValues(
+        vertices[edge.v2 * 3],
+        vertices[edge.v2 * 3 + 1],
+        vertices[edge.v2 * 3 + 2]
+      );
+      vec3.transformMat4(worldA, localA, modelMatrix);
+      vec3.transformMat4(worldB, localB, modelMatrix);
 
-      const w = vec3.create();
-      vec3.subtract(w, worldMid, this.rayOrigin as any);
-      const proj = vec3.dot(w, this.rayDirection as any);
+      const pixA = this.worldToCanvasPixel(worldA[0], worldA[1], worldA[2]);
+      const pixB = this.worldToCanvasPixel(worldB[0], worldB[1], worldB[2]);
+      if (!pixA || !pixB) continue;
 
-      if (proj >= 0) {
-        const closestPointOnRay = vec3.fromValues(
-          this.rayOrigin[0] + this.rayDirection[0] * proj,
-          this.rayOrigin[1] + this.rayDirection[1] * proj,
-          this.rayOrigin[2] + this.rayDirection[2] * proj
-        );
-        const dist = vec3.distance(worldMid, closestPointOnRay);
+      // Distance from mouse to screen-space segment A–B
+      const abx = pixB.x - pixA.x;
+      const aby = pixB.y - pixA.y;
+      const lenSq = abx * abx + aby * aby;
+      let t = 0;
+      if (lenSq > 0.0001) {
+        t = ((mouse.x - pixA.x) * abx + (mouse.y - pixA.y) * aby) / lenSq;
+        t = Math.max(0, Math.min(1, t));
+      }
+      const cx = pixA.x + abx * t;
+      const cy = pixA.y + aby * t;
+      const dist = Math.hypot(mouse.x - cx, mouse.y - cy);
+      const depth = pixA.depth * (1 - t) + pixB.depth * t;
 
-        if (dist < threshold && proj < closestT) {
-          closestT = proj;
-          closestEdge = [edge.v1, edge.v2];
-        }
+      if (dist > pickRadiusPx) continue;
+      if (
+        dist < closestDist - 0.25 ||
+        (Math.abs(dist - closestDist) <= 0.25 && depth < closestDepth)
+      ) {
+        closestDist = dist;
+        closestDepth = depth;
+        closestEdge = [edge.v1, edge.v2];
       }
     }
 
@@ -2169,7 +2217,11 @@ export class SceneInteractionHandler {
     mesh.normals = normals;
   }
 
-  handleDirectSubElementTranslation(deltaX: number, deltaY: number): void {
+  handleDirectSubElementTranslation(
+    deltaX: number,
+    deltaY: number,
+    lockToFaceNormal: boolean = false
+  ): void {
     if (!this.selectedObject || this.selectedVertices.length === 0) return;
 
     const viewMatrix = this.camera.viewMatrix;
@@ -2192,6 +2244,19 @@ export class SceneInteractionHandler {
     
     const localDelta = vec3.create();
     vec3.transformMat4(localDelta, worldDelta, invWorldMatrix);
+
+    // Face mode + Shift: slide only along the selected face normal
+    if (
+      lockToFaceNormal &&
+      this.editSubMode === "face" &&
+      this.selectedFaceNormal
+    ) {
+      const n = this.selectedFaceNormal;
+      const amount = localDelta[0] * n[0] + localDelta[1] * n[1] + localDelta[2] * n[2];
+      localDelta[0] = n[0] * amount;
+      localDelta[1] = n[1] * amount;
+      localDelta[2] = n[2] * amount;
+    }
 
     const vertices = this.selectedObject.vertices as number[];
     const original = this.originalVertexPositions;

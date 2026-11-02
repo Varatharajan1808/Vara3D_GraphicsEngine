@@ -15,6 +15,8 @@ import { createProgram } from "./ShaderProgramLinker";
 import {
   getAttribLocation,
   getUniformLocation,
+  resolveAttribLocation,
+  resolveUniformLocation,
 } from "./AttributeLocationResolver";
 import { TextureCoordinates } from "../../GeometryPrimitives/UVCoordinateMapper";
 import { NormalsData } from "../../GeometryPrimitives/SurfaceNormalCalculator";
@@ -54,6 +56,8 @@ export class WebGLRenderEngine {
   mouseX?: number;
   mouseY?: number;
   selectedObject: any = null;
+  /** Set by interaction handler while dragging gizmo — skip per-mesh selection overlays */
+  isGizmoDragging: boolean = false;
   private combinedBoxBuffer: WebGLBuffer | null = null;
   editorMode: string = "object";
   editSubMode: string = "vertex";
@@ -215,13 +219,13 @@ export class WebGLRenderEngine {
     // Base light
     if (globalLight && globalLight.lightData && globalLight.lightData.baselight) {
       const baselight = globalLight.lightData.baselight;
-      gl.uniform3fv(gl.getUniformLocation(program, "uAmbientLightColor"), baselight.ambient || defaultAmbient);
-      gl.uniform3fv(gl.getUniformLocation(program, "uDiffuseLightColor"), baselight.diffuse || defaultDiffuse);
-      gl.uniform3fv(gl.getUniformLocation(program, "uSpecularLightColor"), baselight.specular || defaultSpecular);
+      gl.uniform3fv(resolveUniformLocation(gl, program, "uAmbientLightColor"), baselight.ambient || defaultAmbient);
+      gl.uniform3fv(resolveUniformLocation(gl, program, "uDiffuseLightColor"), baselight.diffuse || defaultDiffuse);
+      gl.uniform3fv(resolveUniformLocation(gl, program, "uSpecularLightColor"), baselight.specular || defaultSpecular);
     } else {
-      gl.uniform3fv(gl.getUniformLocation(program, "uAmbientLightColor"), defaultAmbient);
-      gl.uniform3fv(gl.getUniformLocation(program, "uDiffuseLightColor"), defaultDiffuse);
-      gl.uniform3fv(gl.getUniformLocation(program, "uSpecularLightColor"), defaultSpecular);
+      gl.uniform3fv(resolveUniformLocation(gl, program, "uAmbientLightColor"), defaultAmbient);
+      gl.uniform3fv(resolveUniformLocation(gl, program, "uDiffuseLightColor"), defaultDiffuse);
+      gl.uniform3fv(resolveUniformLocation(gl, program, "uSpecularLightColor"), defaultSpecular);
     }
 
     const MAX_LIGHTS = 10;
@@ -233,10 +237,10 @@ export class WebGLRenderEngine {
 
     // Point lights
     for (let i = 0; i < MAX_LIGHTS; i++) {
-      const posLoc = gl.getUniformLocation(program, `uLightPosition[${i}]`);
-      const radiusLoc = gl.getUniformLocation(program, `uLightRadius[${i}]`);
-      const colorLoc = gl.getUniformLocation(program, `uPointLightColor[${i}]`);
-      const intensityLoc = gl.getUniformLocation(program, `uPointLightIntensity[${i}]`);
+      const posLoc = resolveUniformLocation(gl, program, `uLightPosition[${i}]`);
+      const radiusLoc = resolveUniformLocation(gl, program, `uLightRadius[${i}]`);
+      const colorLoc = resolveUniformLocation(gl, program, `uPointLightColor[${i}]`);
+      const intensityLoc = resolveUniformLocation(gl, program, `uPointLightIntensity[${i}]`);
 
       if (i < pointLights.length) {
         const light = pointLights[i];
@@ -254,11 +258,11 @@ export class WebGLRenderEngine {
 
     // Spot lights
     for (let i = 0; i < MAX_LIGHTS; i++) {
-      const posLoc = gl.getUniformLocation(program, `uSpotLightPosition[${i}]`);
-      const dirLoc = gl.getUniformLocation(program, `uSpotLightDirection[${i}]`);
-      const angleLoc = gl.getUniformLocation(program, `uSpotLightAngle[${i}]`);
-      const colorLoc = gl.getUniformLocation(program, `uSpotLightColor[${i}]`);
-      const intensityLoc = gl.getUniformLocation(program, `uSpotLightIntensity[${i}]`);
+      const posLoc = resolveUniformLocation(gl, program, `uSpotLightPosition[${i}]`);
+      const dirLoc = resolveUniformLocation(gl, program, `uSpotLightDirection[${i}]`);
+      const angleLoc = resolveUniformLocation(gl, program, `uSpotLightAngle[${i}]`);
+      const colorLoc = resolveUniformLocation(gl, program, `uSpotLightColor[${i}]`);
+      const intensityLoc = resolveUniformLocation(gl, program, `uSpotLightIntensity[${i}]`);
 
       if (i < spotLights.length) {
         const light = spotLights[i];
@@ -278,9 +282,9 @@ export class WebGLRenderEngine {
 
     // Directional lights
     for (let i = 0; i < MAX_LIGHTS; i++) {
-      const dirLoc = gl.getUniformLocation(program, `uLightDirection[${i}]`);
-      const colorLoc = gl.getUniformLocation(program, `uDirectionalLightColor[${i}]`);
-      const intensityLoc = gl.getUniformLocation(program, `uDirectionalLightIntensity[${i}]`);
+      const dirLoc = resolveUniformLocation(gl, program, `uLightDirection[${i}]`);
+      const colorLoc = resolveUniformLocation(gl, program, `uDirectionalLightColor[${i}]`);
+      const intensityLoc = resolveUniformLocation(gl, program, `uDirectionalLightIntensity[${i}]`);
 
       if (i < directionalLights.length) {
         const light = directionalLights[i];
@@ -300,13 +304,14 @@ export class WebGLRenderEngine {
     program: WebGLProgram,
     camera: CameraController
   ): void {
-    const modelCameraLoc = gl.getUniformLocation(
+    const modelCameraLoc = resolveUniformLocation(
+      gl,
       program,
       "u_modelCameraMatrix"
     );
-    const viewLoc = gl.getUniformLocation(program, "u_viewMatrix");
-    const projectionLoc = gl.getUniformLocation(program, "u_projectionMatrix");
-    const cameraPosLoc = gl.getUniformLocation(program, "uCameraPosition");
+    const viewLoc = resolveUniformLocation(gl, program, "u_viewMatrix");
+    const projectionLoc = resolveUniformLocation(gl, program, "u_projectionMatrix");
+    const cameraPosLoc = resolveUniformLocation(gl, program, "uCameraPosition");
 
     if (modelCameraLoc)
       gl.uniformMatrix4fv(modelCameraLoc, false, camera.modelMatrix);
@@ -329,42 +334,31 @@ export class WebGLRenderEngine {
       alpha?: number;
     } = {}
   ) {
-    gl.uniform3f(
-      gl.getUniformLocation(program, "uColor"),
-      ...(material.color ?? [1, 1, 1])
-    );
-    gl.uniform1f(
-      gl.getUniformLocation(program, "uRoughness"),
-      material.roughness ?? 0.5
-    );
-    gl.uniform1f(
-      gl.getUniformLocation(program, "uMetallic"),
-      material.metallic ?? 0.0
-    );
-    gl.uniform1f(
-      gl.getUniformLocation(program, "uSpecular"),
-      material.specular ?? 0.5
-    );
-    gl.uniform3fv(
-      gl.getUniformLocation(program, "uEmissionColor"),
-      material.emissionColor ?? [0, 0, 0]
-    );
-    gl.uniform1f(
-      gl.getUniformLocation(program, "uEmissionIntensity"),
-      material.emissionIntensity ?? 0.0
-    );
-    gl.uniform1f(
-      gl.getUniformLocation(program, "uAlpha"),
-      material.alpha ?? 1.0
-    );
-    gl.uniform1f(
-      gl.getUniformLocation(program, "uMetallicFactor"),
-      1.0
-    );
-    gl.uniform1f(
-      gl.getUniformLocation(program, "uRoughnessFactor"),
-      1.0
-    );
+    const colorLoc = resolveUniformLocation(gl, program, "uColor");
+    if (colorLoc) {
+      const c = material.color ?? [1, 1, 1];
+      gl.uniform3f(colorLoc, c[0], c[1], c[2]);
+    }
+    const roughnessLoc = resolveUniformLocation(gl, program, "uRoughness");
+    if (roughnessLoc) gl.uniform1f(roughnessLoc, material.roughness ?? 0.5);
+    const metallicLoc = resolveUniformLocation(gl, program, "uMetallic");
+    if (metallicLoc) gl.uniform1f(metallicLoc, material.metallic ?? 0.0);
+    const specularLoc = resolveUniformLocation(gl, program, "uSpecular");
+    if (specularLoc) gl.uniform1f(specularLoc, material.specular ?? 0.5);
+    const emissionColorLoc = resolveUniformLocation(gl, program, "uEmissionColor");
+    if (emissionColorLoc) {
+      gl.uniform3fv(emissionColorLoc, material.emissionColor ?? [0, 0, 0]);
+    }
+    const emissionIntensityLoc = resolveUniformLocation(gl, program, "uEmissionIntensity");
+    if (emissionIntensityLoc) {
+      gl.uniform1f(emissionIntensityLoc, material.emissionIntensity ?? 0.0);
+    }
+    const alphaLoc = resolveUniformLocation(gl, program, "uAlpha");
+    if (alphaLoc) gl.uniform1f(alphaLoc, material.alpha ?? 1.0);
+    const metallicFactorLoc = resolveUniformLocation(gl, program, "uMetallicFactor");
+    if (metallicFactorLoc) gl.uniform1f(metallicFactorLoc, 1.0);
+    const roughnessFactorLoc = resolveUniformLocation(gl, program, "uRoughnessFactor");
+    if (roughnessFactorLoc) gl.uniform1f(roughnessFactorLoc, 1.0);
   }
   drawMeshWithFaceHighlighting(
     mesh: any,
@@ -497,6 +491,25 @@ export class WebGLRenderEngine {
       "Cylinder-Geometry": new CylinderGeometryBuilder().CylinderData(),
     };
 
+    // Camera uniforms are program-global — set once per frame, not per mesh
+    this.gl.useProgram(program);
+    this.setCameraUniforms(this.gl, program, camera);
+
+    // Hierarchy / multi-select already get a combined AABB — skip per-mesh outlines
+    const selectedPreview = objects.filter(
+      (m: any) => m && m.isSelected && m.visible !== false && m.type !== "Grid-Geometry"
+    );
+    const useCombinedSelectionOutline =
+      selectedPreview.length >= 2 ||
+      selectedPreview.some(
+        (m: any) =>
+          (m.parent !== null && m.parent !== undefined) ||
+          (m.children && m.children.length > 0)
+      );
+    // Skip expensive/per-mesh selection overlays while gizmo-dragging
+    const skipPerMeshSelectionOutline =
+      this.isGizmoDragging || useCombinedSelectionOutline;
+
     const drawMesh = (mesh: any, disableDepthTest: boolean = false) => {
       if (!mesh || (mesh.type === "Grid-Geometry" && mesh.visible === false)) return;
       if (mesh.visible === false) return;
@@ -525,127 +538,6 @@ export class WebGLRenderEngine {
       }
       if (!mesh.tangentBuffer || mesh.geometryNeedsUpdate) {
         mesh.tangentBuffer = createBuffer(this.gl, mesh.tangent || data.Tangents || []);
-      }
-      // Dynamically generate silhouette index buffer if selected
-      if (mesh.isSelected && mesh.indices && mesh.indices.length > 0 && mesh.vertices && mesh.vertices.length > 0) {
-        const indices = mesh.indices;
-        const vertices = mesh.vertices;
-        const worldMatrix = mesh.getWorldMatrix();
-
-        // 1. Transform vertices to world space
-        const worldPositions: number[][] = [];
-        for (let i = 0; i < vertices.length; i += 3) {
-          const localPos = vec3.fromValues(vertices[i], vertices[i + 1], vertices[i + 2]);
-          const worldPos = vec3.create();
-          vec3.transformMat4(worldPos, localPos, worldMatrix);
-          worldPositions.push([worldPos[0], worldPos[1], worldPos[2]]);
-        }
-
-        // 2. Compute normal and center for each triangle in world space
-        const numTriangles = indices.length / 3;
-        const triNormals: number[][] = [];
-        const triCenters: number[][] = [];
-        for (let i = 0; i < indices.length; i += 3) {
-          const v0 = indices[i];
-          const v1 = indices[i + 1];
-          const v2 = indices[i + 2];
-
-          const p0 = worldPositions[v0];
-          const p1 = worldPositions[v1];
-          const p2 = worldPositions[v2];
-
-          triCenters.push([
-            (p0[0] + p1[0] + p2[0]) / 3,
-            (p0[1] + p1[1] + p2[1]) / 3,
-            (p0[2] + p1[2] + p2[2]) / 3
-          ]);
-
-          const ux = p1[0] - p0[0], uy = p1[1] - p0[1], uz = p1[2] - p0[2];
-          const vx = p2[0] - p0[0], vy = p2[1] - p0[1], vz = p2[2] - p0[2];
-          const nx = uy * vz - uz * vy;
-          const ny = uz * vx - ux * vz;
-          const nz = ux * vy - uy * vx;
-          const len = Math.sqrt(nx * nx + ny * ny + nz * nz);
-          triNormals.push(len > 0.0001 ? [nx / len, ny / len, nz / len] : [0, 0, 0]);
-        }
-
-        // 3. Determine if each triangle faces the camera
-        const cameraPos = vec3.fromValues(camera.eye.x, camera.eye.y, camera.eye.z);
-        const triFacing: boolean[] = [];
-        for (let i = 0; i < numTriangles; i++) {
-          const center = triCenters[i];
-          const normal = triNormals[i];
-
-          const vx = center[0] - cameraPos[0];
-          const vy = center[1] - cameraPos[1];
-          const vz = center[2] - cameraPos[2];
-
-          const dot = normal[0] * vx + normal[1] * vy + normal[2] * vz;
-          triFacing.push(dot < 0);
-        }
-
-        // Helper to get vertex position key (rounded to 4 decimal places)
-        const getPosKey = (idx: number) => {
-          const x = vertices[idx * 3];
-          const y = vertices[idx * 3 + 1];
-          const z = vertices[idx * 3 + 2];
-          return `${x.toFixed(4)},${y.toFixed(4)},${z.toFixed(4)}`;
-        };
-
-        // 4. Group edges and associate them with adjacent triangles
-        const edgeMap: Map<string, { v1: number; v2: number; triIndices: number[] }> = new Map();
-        for (let i = 0; i < indices.length; i += 3) {
-          const triIdx = i / 3;
-          const v0 = indices[i];
-          const v1 = indices[i + 1];
-          const v2 = indices[i + 2];
-
-          const triEdges = [[v0, v1], [v1, v2], [v2, v0]];
-          for (const [a, b] of triEdges) {
-            const ka = getPosKey(a);
-            const kb = getPosKey(b);
-            const key = ka < kb ? `${ka}|${kb}` : `${kb}|${ka}`;
-
-            let edge = edgeMap.get(key);
-            if (!edge) {
-              edge = { v1: a, v2: b, triIndices: [] };
-              edgeMap.set(key, edge);
-            }
-            edge.triIndices.push(triIdx);
-          }
-        }
-
-        // 5. Gather silhouette edges (separate facing from non-facing faces)
-        const wireframeIndices = [];
-        for (const edge of edgeMap.values()) {
-          if (edge.triIndices.length === 1) {
-            if (triFacing[edge.triIndices[0]]) {
-              wireframeIndices.push(edge.v1, edge.v2);
-            }
-          } else if (edge.triIndices.length > 1) {
-            let hasFacing = false;
-            let hasNonFacing = false;
-            for (const triIdx of edge.triIndices) {
-              if (triFacing[triIdx]) {
-                hasFacing = true;
-              } else {
-                hasNonFacing = true;
-              }
-            }
-            if (hasFacing && hasNonFacing) {
-              wireframeIndices.push(edge.v1, edge.v2);
-            }
-          }
-        }
-
-        // 6. Upload dynamically to GPU
-        if (!mesh.wireframeIndexBuffer) {
-          mesh.wireframeIndexBuffer = this.gl.createBuffer();
-        }
-        this.gl.bindBuffer(this.gl.ELEMENT_ARRAY_BUFFER, mesh.wireframeIndexBuffer);
-        const TypedArray = indices instanceof Uint32Array ? Uint32Array : Uint16Array;
-        this.gl.bufferData(this.gl.ELEMENT_ARRAY_BUFFER, new TypedArray(wireframeIndices), this.gl.DYNAMIC_DRAW);
-        mesh.wireframeIndexCount = wireframeIndices.length;
       }
       mesh.geometryNeedsUpdate = false;
 
@@ -704,7 +596,7 @@ export class WebGLRenderEngine {
 
       const hasTexture = mesh.texture ? 1 : 0;
       this.gl.uniform1i(
-        this.gl.getUniformLocation(program, "uHasTexture"),
+        resolveUniformLocation(this.gl, program, "uHasTexture"),
         hasTexture
       );
       this.gl.activeTexture(this.gl.TEXTURE0);
@@ -712,11 +604,11 @@ export class WebGLRenderEngine {
         this.gl.TEXTURE_2D,
         mesh.texture || this.defaultTexture
       );
-      this.gl.uniform1i(this.gl.getUniformLocation(program, "uSampler"), 0);
+      this.gl.uniform1i(resolveUniformLocation(this.gl, program, "uSampler"), 0);
 
       const hasNormalMap = mesh.normalMap ? 1 : 0;
       this.gl.uniform1i(
-        this.gl.getUniformLocation(program, "uHasNormalMap"),
+        resolveUniformLocation(this.gl, program, "uHasNormalMap"),
         hasNormalMap
       );
       this.gl.activeTexture(this.gl.TEXTURE1);
@@ -724,10 +616,9 @@ export class WebGLRenderEngine {
         this.gl.TEXTURE_2D,
         mesh.normalMap || this.defaultNormalMap
       );
-      this.gl.uniform1i(this.gl.getUniformLocation(program, "uNormalMap"), 1);
+      this.gl.uniform1i(resolveUniformLocation(this.gl, program, "uNormalMap"), 1);
 
       getUniformLocation(this.gl, program, "u_modelMatrix", worldMatrix);
-      this.setCameraUniforms(this.gl, program, camera);
 
       const hasHighlightedFace =
         mesh.highlightedFace && mesh.highlightedFace.length > 0;
@@ -758,51 +649,21 @@ export class WebGLRenderEngine {
         this.gl.bindBuffer(this.gl.ELEMENT_ARRAY_BUFFER, null);
       }
 
-      // Draw wireframe outline overlay if the mesh is selected
-      if (mesh.isSelected) {
-        // Vibrant Orange selection color
-        const wireframeColor = [1.0, 0.5, 0.0];
-        const wireframeMaterial = {
-          ...materialProps,
-          color: wireframeColor,
-          roughness: 0.0,
-          metallic: 0.0,
-          emissionColor: wireframeColor,
-          emissionIntensity: 1.0,
-          alpha: 1.0
-        };
-        this.setMaterialUniforms(this.gl, program, wireframeMaterial);
-
-        // Turn off textures/normal maps for wireframe overlay
-        this.gl.uniform1i(this.gl.getUniformLocation(program, "uHasTexture"), 0);
-        this.gl.uniform1i(this.gl.getUniformLocation(program, "uHasNormalMap"), 0);
-
-        // Disable depth testing for selection wireframe so outline is fully visible
-        this.gl.disable(this.gl.DEPTH_TEST);
-
-        if (mesh.indices && "length" in mesh.indices && mesh.wireframeIndexBuffer) {
-          this.gl.bindBuffer(this.gl.ELEMENT_ARRAY_BUFFER, mesh.wireframeIndexBuffer);
-          const indexType = mesh.indices instanceof Uint32Array
-            ? this.gl.UNSIGNED_INT : this.gl.UNSIGNED_SHORT;
-          this.gl.drawElements(
-            this.gl.LINES,
-            mesh.wireframeIndexCount,
-            indexType,
-            0
+      // Cheap selection outline: world AABB only (no per-frame silhouette). Skipped for
+      // hierarchy/multi-select (combined box) and while gizmo dragging.
+      if (mesh.isSelected && !skipPerMeshSelectionOutline) {
+        const box = mesh.boundingBox;
+        if (box && isFinite(box.min[0]) && isFinite(box.max[0])) {
+          this.drawCombinedBoundingBox(
+            [box.min[0], box.min[1], box.min[2]],
+            [box.max[0], box.max[1], box.max[2]],
+            program,
+            camera
           );
-          this.gl.bindBuffer(this.gl.ELEMENT_ARRAY_BUFFER, null);
-        } else {
-          // Fallback if no indices
-          this.gl.drawArrays(this.gl.LINES, 0, mesh.vertices.length / 3);
+          // Restore mesh model matrix / program state for subsequent draws
+          this.gl.useProgram(program);
+          getUniformLocation(this.gl, program, "u_modelMatrix", worldMatrix);
         }
-
-        this.gl.enable(this.gl.DEPTH_TEST);
-
-        // Restore texture uniform states for other meshes
-        const hasTexture = mesh.texture ? 1 : 0;
-        this.gl.uniform1i(this.gl.getUniformLocation(program, "uHasTexture"), hasTexture);
-        const hasNormalMap = mesh.normalMap ? 1 : 0;
-        this.gl.uniform1i(this.gl.getUniformLocation(program, "uHasNormalMap"), hasNormalMap);
       }
 
       // Draw vertex handles in Edit Mode
@@ -818,14 +679,16 @@ export class WebGLRenderEngine {
 
         this.gl.enable(this.gl.DEPTH_TEST);
 
+        const pointColorLoc = resolveUniformLocation(this.gl, this.pointProgram, "uColor");
+
         // Draw all vertex handles in cyan
-        this.gl.uniform3f(this.gl.getUniformLocation(this.pointProgram, "uColor"), 0.0, 0.8, 1.0); // Cyan
+        if (pointColorLoc) this.gl.uniform3f(pointColorLoc, 0.0, 0.8, 1.0); // Cyan
         this.gl.drawArrays(this.gl.POINTS, 0, mesh.vertices.length / 3);
 
         // Draw selected vertex handle in yellow
         if (this.editSubMode === "vertex" && mesh.selectedVertexIndex !== undefined && mesh.selectedVertexIndex >= 0) {
           this.gl.disable(this.gl.DEPTH_TEST); // Render on top
-          this.gl.uniform3f(this.gl.getUniformLocation(this.pointProgram, "uColor"), 1.0, 0.9, 0.0); // Yellow
+          if (pointColorLoc) this.gl.uniform3f(pointColorLoc, 1.0, 0.9, 0.0); // Yellow
           this.gl.drawArrays(this.gl.POINTS, mesh.selectedVertexIndex, 1);
           this.gl.enable(this.gl.DEPTH_TEST);
         }
@@ -833,7 +696,7 @@ export class WebGLRenderEngine {
         // Draw hovered vertex handle in orange
         if (this.editSubMode === "vertex" && mesh.hoveredVertexIndex !== undefined && mesh.hoveredVertexIndex >= 0 && mesh.hoveredVertexIndex !== mesh.selectedVertexIndex) {
           this.gl.disable(this.gl.DEPTH_TEST);
-          this.gl.uniform3f(this.gl.getUniformLocation(this.pointProgram, "uColor"), 1.0, 0.5, 0.0); // Orange
+          if (pointColorLoc) this.gl.uniform3f(pointColorLoc, 1.0, 0.5, 0.0); // Orange
           this.gl.drawArrays(this.gl.POINTS, mesh.hoveredVertexIndex, 1);
           this.gl.enable(this.gl.DEPTH_TEST);
         }
@@ -841,7 +704,7 @@ export class WebGLRenderEngine {
         // Draw selected edge vertices in yellow
         if (this.editSubMode === "edge" && mesh.selectedEdgeVertices && mesh.selectedEdgeVertices.length > 0) {
           this.gl.disable(this.gl.DEPTH_TEST);
-          this.gl.uniform3f(this.gl.getUniformLocation(this.pointProgram, "uColor"), 1.0, 0.9, 0.0); // Yellow
+          if (pointColorLoc) this.gl.uniform3f(pointColorLoc, 1.0, 0.9, 0.0); // Yellow
           for (const idx of mesh.selectedEdgeVertices) {
             if (idx >= 0 && idx < mesh.vertices.length / 3) {
               this.gl.drawArrays(this.gl.POINTS, idx, 1);
@@ -853,7 +716,7 @@ export class WebGLRenderEngine {
         // Draw hovered edge vertices in orange
         if (this.editSubMode === "edge" && mesh.hoveredEdgeVertices && mesh.hoveredEdgeVertices.length > 0 && mesh.hoveredEdgeVertices !== mesh.selectedEdgeVertices) {
           this.gl.disable(this.gl.DEPTH_TEST);
-          this.gl.uniform3f(this.gl.getUniformLocation(this.pointProgram, "uColor"), 1.0, 0.5, 0.0); // Orange
+          if (pointColorLoc) this.gl.uniform3f(pointColorLoc, 1.0, 0.5, 0.0); // Orange
           for (const idx of mesh.hoveredEdgeVertices) {
             if (idx >= 0 && idx < mesh.vertices.length / 3) {
               this.gl.drawArrays(this.gl.POINTS, idx, 1);
@@ -969,8 +832,8 @@ export class WebGLRenderEngine {
       }
 
       if (hasBounds) {
+        // Selection helper outline — draw but do not count toward scene draw calls
         this.drawCombinedBoundingBox([minX, minY, minZ], [maxX, maxY, maxZ], program, camera);
-        incrementDrawCall();
       }
     }
 
@@ -1066,17 +929,17 @@ export class WebGLRenderEngine {
     this.gl.bufferData(this.gl.ARRAY_BUFFER, boxVertices, this.gl.DYNAMIC_DRAW);
 
     // Disable non-position vertex attributes to prevent shader mismatch
-    const aNormalLoc = this.gl.getAttribLocation(program, "aNormal");
+    const aNormalLoc = resolveAttribLocation(this.gl, program, "aVertexNormal");
     if (aNormalLoc >= 0) {
       this.gl.disableVertexAttribArray(aNormalLoc);
       this.gl.vertexAttrib3f(aNormalLoc, 0.0, 1.0, 0.0);
     }
-    const aTexLoc = this.gl.getAttribLocation(program, "aTextureCoord");
+    const aTexLoc = resolveAttribLocation(this.gl, program, "aTextureCoord");
     if (aTexLoc >= 0) {
       this.gl.disableVertexAttribArray(aTexLoc);
       this.gl.vertexAttrib2f(aTexLoc, 0.0, 0.0);
     }
-    const aTangentLoc = this.gl.getAttribLocation(program, "aTangent");
+    const aTangentLoc = resolveAttribLocation(this.gl, program, "aTangent");
     if (aTangentLoc >= 0) {
       this.gl.disableVertexAttribArray(aTangentLoc);
       this.gl.vertexAttrib3f(aTangentLoc, 1.0, 0.0, 0.0);
@@ -1099,8 +962,8 @@ export class WebGLRenderEngine {
       alpha: 1.0,
     });
 
-    this.gl.uniform1i(this.gl.getUniformLocation(program, "uHasTexture"), 0);
-    this.gl.uniform1i(this.gl.getUniformLocation(program, "uHasNormalMap"), 0);
+    this.gl.uniform1i(resolveUniformLocation(this.gl, program, "uHasTexture"), 0);
+    this.gl.uniform1i(resolveUniformLocation(this.gl, program, "uHasNormalMap"), 0);
 
     // Render over scene objects without depth occlusion
     this.gl.disable(this.gl.DEPTH_TEST);
@@ -1191,7 +1054,7 @@ export class WebGLRenderEngine {
 
     const hasTexture = mesh.texture ? 1 : 0;
     this.gl.uniform1i(
-      this.gl.getUniformLocation(program, "uHasTexture"),
+      resolveUniformLocation(this.gl, program, "uHasTexture"),
       hasTexture
     );
     this.gl.activeTexture(this.gl.TEXTURE0);
@@ -1199,11 +1062,11 @@ export class WebGLRenderEngine {
       this.gl.TEXTURE_2D,
       mesh.texture || this.defaultTexture
     );
-    this.gl.uniform1i(this.gl.getUniformLocation(program, "uSampler"), 0);
+    this.gl.uniform1i(resolveUniformLocation(this.gl, program, "uSampler"), 0);
 
     const hasNormalMap = mesh.normalMap ? 1 : 0;
     this.gl.uniform1i(
-      this.gl.getUniformLocation(program, "uHasNormalMap"),
+      resolveUniformLocation(this.gl, program, "uHasNormalMap"),
       hasNormalMap
     );
     this.gl.activeTexture(this.gl.TEXTURE1);
@@ -1211,7 +1074,7 @@ export class WebGLRenderEngine {
       this.gl.TEXTURE_2D,
       mesh.normalMap || this.defaultNormalMap
     );
-    this.gl.uniform1i(this.gl.getUniformLocation(program, "uNormalMap"), 1);
+    this.gl.uniform1i(resolveUniformLocation(this.gl, program, "uNormalMap"), 1);
 
     const worldMatrix = mesh.getWorldMatrix();
     getUniformLocation(this.gl, program, "u_modelMatrix", worldMatrix);

@@ -90,21 +90,8 @@ gridMesh.position = { x: 0, y: 0, z: 0 };
 gridMesh.updateTranslate();
 scene.add(gridMesh);
 
+// Default cube/light are added only after IndexedDB restore check (avoids refresh flash)
 const boxGeometry = new BoxGeometryBuilder();
-const cubeMaterial = material.getMaterialProperties({
-  color: MaterialColor.red,
-  metallic: 0.5,
-  roughness: 0.2,
-  specular: 16.0,
-  alpha: 1.0,
-  emissionColor: [0.0, 0.0, 0.0],
-  emissionIntensity: 0.0,
-});
-const cube = new RenderableMeshObject(boxGeometry.CubeData(), cubeMaterial);
-cube.position = { x: 0, y: 0, z: 0 };
-cube.updateTranslate();
-scene.add(cube);
-// Handle Grid changes (moved below uiManager initialization)
 
 // Initialize light system
 let program: any = null;
@@ -127,18 +114,40 @@ masterLight.BaseLight({
 });
 scene.globalLight = masterLight;
 
-// Add default point light
-const defaultLight = new PointLightNode("Point Light");
-defaultLight.position = { x: 0, y: 0, z: 3 };
-defaultLight.radius = 2.0;
-defaultLight.color = [1, 1, 1];
-defaultLight.intensity = 1.0;
-scene.add(defaultLight);
-
 // Store individual light instances for UI tracking
 const lightInstances: Map<string, { light: SceneLightingManager; type: string; index: number }> = new Map();
-// Add the default light to tracking
-lightInstances.set(masterLight.uuid, { light: masterLight, type: "point", index: 0 });
+
+/** Fresh-editor starter content (cube + point light). Not used when restoring a saved session. */
+function addDefaultStarterContent(): void {
+  const cubeMaterial = material.getMaterialProperties({
+    color: MaterialColor.red,
+    metallic: 0.5,
+    roughness: 0.2,
+    specular: 16.0,
+    alpha: 1.0,
+    emissionColor: [0.0, 0.0, 0.0],
+    emissionIntensity: 0.0,
+  });
+  const cube = new RenderableMeshObject(boxGeometry.CubeData(), cubeMaterial);
+  cube.position = { x: 0, y: 0, z: 0 };
+  cube.updateTranslate();
+  scene.add(cube);
+
+  const defaultLight = new PointLightNode("Point Light");
+  defaultLight.position = { x: 0, y: 0, z: 3 };
+  defaultLight.radius = 2.0;
+  defaultLight.color = [1, 1, 1];
+  defaultLight.intensity = 1.0;
+  scene.add(defaultLight);
+
+  lightInstances.set(masterLight.uuid, { light: masterLight, type: "point", index: 0 });
+  masterLight.PointLight({
+    lightPosition: [0.0, 0.0, 3.0],
+    radius: 2.0,
+    lightColor: [1.0, 1.0, 1.0],
+    intensity: 2.0,
+  });
+}
 
 // Initialize GLTF loader
 const loader = new GLTFAssetLoader(gl, scene);
@@ -209,11 +218,19 @@ let previousSelectedUUID: string | null = null;
 // Auto-Save System (IndexedDB Background Storage)
 // ============================================================================
 let autoSaveTimeout: any = null;
+function getCameraOrbitState() {
+  return {
+    rotationX: events.rotationX,
+    rotationY: events.rotationY,
+    radius: events.cameraRadiuscam,
+  };
+}
+
 function triggerAutoSave() {
   if (autoSaveTimeout) clearTimeout(autoSaveTimeout);
   autoSaveTimeout = setTimeout(async () => {
     try {
-      await IndexedDBSceneStorage.saveScene(scene, camera);
+      await IndexedDBSceneStorage.saveScene(scene, camera, getCameraOrbitState());
     } catch (err) {
       console.warn("[AutoSave] Error saving to IndexedDB:", err);
     }
@@ -221,8 +238,12 @@ function triggerAutoSave() {
 }
 
 window.addEventListener("beforeunload", () => {
-  IndexedDBSceneStorage.saveScene(scene, camera);
+  IndexedDBSceneStorage.saveScene(scene, camera, getCameraOrbitState());
 });
+
+events.onViewChange = () => {
+  triggerAutoSave();
+};
 
 const commandHistory = new CommandHistory(50);
 commandHistory.onChange((canUndo, canRedo, undoName, redoName) => {
@@ -500,6 +521,7 @@ console.log(selectedObject);
 
 // Scene graph update counter
 let frameCount = 0;
+let wasGizmoDragging = false;
 
 // Update scene graph
 function updateSceneGraph() {
@@ -1685,22 +1707,47 @@ document.addEventListener("contextmenu", (e) => {
   }
 });
 
-// Add delete functionality with Delete key
+// Single Delete/Backspace path for viewport + keyboard (same as scene-graph trash)
 document.addEventListener("keydown", (e) => {
-  if (e.key === "Delete" && previousSelectedUUID) {
-    // Confirm before deleting
-    const uuid = previousSelectedUUID;
-    const name = selectedObject?.name || selectedObject?.type || "Selected Object";
-    uiManager.showConfirm({
-      title: "Delete Object",
-      message: `Are you sure you want to delete <strong style="color: var(--text-white);">"${name}"</strong>?`,
-      confirmText: "Delete",
-      isDanger: true,
-      onConfirm: () => {
-        deleteObjectFromScene(uuid);
-      }
-    });
+  if (e.key !== "Delete" && e.key !== "Backspace") return;
+  if (
+    document.activeElement instanceof HTMLInputElement ||
+    document.activeElement instanceof HTMLTextAreaElement
+  ) {
+    return;
   }
+
+  let toDelete: SceneNode[] = [];
+  if (events.select && events.select.length > 0) {
+    toDelete = events.select.filter(
+      (o: any) => o && o.type !== "Grid-Geometry"
+    ) as SceneNode[];
+  } else if (selectedObject && (selectedObject as any).type !== "Grid-Geometry") {
+    toDelete = [selectedObject as SceneNode];
+  } else if (previousSelectedUUID) {
+    const node = findObjectByUUID(previousSelectedUUID);
+    if (node && node.type !== "Grid-Geometry") {
+      toDelete = [node];
+    }
+  }
+
+  if (toDelete.length === 0) return;
+
+  e.preventDefault();
+  const label =
+    toDelete.length > 1
+      ? `${toDelete.length} Objects`
+      : toDelete[0].name || toDelete[0].type || "Selected Object";
+
+  uiManager.showConfirm({
+    title: "Delete Object",
+    message: `Are you sure you want to delete <strong style="color: var(--text-white);">"${label}"</strong>?`,
+    confirmText: "Delete",
+    isDanger: true,
+    onConfirm: () => {
+      executeDeleteObjects(toDelete);
+    },
+  });
 });
 
 // Handle material property changes
@@ -1926,11 +1973,16 @@ function animate() {
   viewHelper.update();
 
   const controls = events.controlEvent();
-  events.updateUI(
-    events,
-    document.getElementById("object-uuid") as HTMLElement,
-    document.getElementById("object-type") as HTMLElement
-  );
+  const isGizmoDragging = events.isGizmoInteraction;
+
+  // Skip heavy transform UI rebinds while gizmo-dragging (throttled properties cover live values)
+  if (!isGizmoDragging) {
+    events.updateUI(
+      events,
+      document.getElementById("object-uuid") as HTMLElement,
+      document.getElementById("object-type") as HTMLElement
+    );
+  }
 
   // Check if selection changed from viewport (mouse clicks)
   const currentViewportSelected = events.select && events.select.length > 0 ? events.select[0] : null;
@@ -1961,9 +2013,15 @@ function animate() {
     }
   }
 
-  // If gizmo is being used, update properties panel in real-time
-  if (events.isGizmoInteraction && selectedObject) {
-    updateObjectProperties(selectedObject);
+  // Properties panel: throttle during gizmo drag; flush final values on release
+  if (isGizmoDragging && selectedObject) {
+    if (frameCount % 5 === 0) {
+      updateObjectProperties(selectedObject);
+    }
+    wasGizmoDragging = true;
+  } else if (wasGizmoDragging) {
+    if (selectedObject) updateObjectProperties(selectedObject);
+    wasGizmoDragging = false;
   }
 
   // Update camera
@@ -1977,8 +2035,8 @@ function animate() {
     (document.getElementById("camera-pos-z") as HTMLInputElement).value = camera.eye.z.toFixed(2);
   }
 
-  // Sync isSelected flag — use cached UUID set, only rebuild when selection changes
-    const selectionCacheKey = (events.select || []).map((o: any) => o?.uuid || '').join(',') + '|' + (selectedObject?.uuid || '');
+  // Sync isSelected flag — rebuild UUID set + flags only when selection or object count changes
+    const selectionCacheKey = (events.select || []).map((o: any) => o?.uuid || '').join(',') + '|' + (selectedObject?.uuid || '') + '|' + scene.objects.length;
     if (selectionCacheKey !== lastSelectionCacheKey) {
       lastSelectionCacheKey = selectionCacheKey;
       cachedSelectedUUIDs.clear();
@@ -1998,11 +2056,11 @@ function animate() {
       for (const node of selectedNodes) {
         collectSelected(node);
       }
-    }
 
-    scene.objects.forEach((obj: any) => {
-      obj.isSelected = cachedSelectedUUIDs.has(obj.uuid);
-    });
+      scene.objects.forEach((obj: any) => {
+        obj.isSelected = cachedSelectedUUIDs.has(obj.uuid);
+      });
+    }
 
   // Render
   webgl.Render(program, camera, scene);
@@ -2010,20 +2068,14 @@ function animate() {
   // Update status bar stats
   uiManager.updateStatusBar(webgl.getStats());
 
-  // Update scene graph periodically
-  if (frameCount % 60 === 0) {
+  // Periodic scene graph rebuild — skip while gizmo-dragging (avoids ~1s FPS dips)
+  if (!isGizmoDragging && frameCount % 60 === 0) {
     updateSceneGraph();
   }
   frameCount++;
 
   requestAnimationFrame(animate);
 }
-
-// Initialize scene graph
-updateSceneGraph();
-
-// Start render loop
-animate();
 
 // Global Keyboard Shortcuts for Undo / Redo (Ctrl+Z, Ctrl+Y, Ctrl+Shift+Z)
 window.addEventListener("keydown", (e: KeyboardEvent) => {
@@ -2055,9 +2107,9 @@ window.addEventListener("keydown", (e: KeyboardEvent) => {
   }
 });
 
-
-// Auto-Restore Session from IndexedDB if saved scene exists
+// Wait for IndexedDB restore (or add defaults) BEFORE first render — prevents deleted-cube flash
 (async () => {
+  let restored = false;
   try {
     const saved = await IndexedDBSceneStorage.loadScene();
     if (saved && saved.nodes && saved.nodes.length > 0) {
@@ -2070,10 +2122,32 @@ window.addEventListener("keydown", (e: KeyboardEvent) => {
         material,
         camera
       );
-      updateSceneGraph();
+      // Sync orbit controller with restored camera (otherwise animate() overwrites eye)
+      if (saved.camera) {
+        if (
+          typeof saved.camera.rotationX === "number" &&
+          typeof saved.camera.rotationY === "number" &&
+          typeof saved.camera.radius === "number"
+        ) {
+          events.rotationX = saved.camera.rotationX;
+          events.rotationY = saved.camera.rotationY;
+          events.cameraRadiuscam = saved.camera.radius;
+          events.scalervalue = saved.camera.radius;
+        } else {
+          events.updateOrbitParametersFromEye(camera);
+        }
+      }
+      restored = true;
       console.log("[IndexedDB] Session successfully restored!");
     }
   } catch (err) {
     console.warn("[IndexedDB] Session auto-restore error:", err);
   }
+
+  if (!restored) {
+    addDefaultStarterContent();
+  }
+
+  updateSceneGraph();
+  animate();
 })();

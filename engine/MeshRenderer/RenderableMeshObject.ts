@@ -210,35 +210,46 @@ export class RenderableMeshObject extends SceneNode {
     const vertices = this.vertices;
     if (!vertices || vertices.length === 0) return;
 
+    // Recompute local OBB when geometry changed. Do NOT clear geometryNeedsUpdate here —
+    // the renderer must see the flag to re-upload GPU buffers (edit-mode live drag).
     if (!this.originalBoundingBox || this.geometryNeedsUpdate) {
       this.computeOriginalBoundingBox();
-      this.geometryNeedsUpdate = false;
     }
 
-    const worldMatrix = this.getWorldMatrix();
-    const len = vertices.length;
+    const obb = this.originalBoundingBox;
+    if (!obb) return;
 
-    let minX = Infinity, minY = Infinity, minZ = Infinity;
-    let maxX = -Infinity, maxY = -Infinity, maxZ = -Infinity;
+    const worldMatrix = this.getWorldMatrix();
+    const min = obb.min;
+    const max = obb.max;
+
+    // Transform only the 8 OBB corners (not every vertex)
+    const corners: [number, number, number][] = [
+      [min[0], min[1], min[2]],
+      [max[0], min[1], min[2]],
+      [min[0], max[1], min[2]],
+      [max[0], max[1], min[2]],
+      [min[0], min[1], max[2]],
+      [max[0], min[1], max[2]],
+      [min[0], max[1], max[2]],
+      [max[0], max[1], max[2]],
+    ];
 
     const m00 = worldMatrix[0], m01 = worldMatrix[1], m02 = worldMatrix[2];
     const m10 = worldMatrix[4], m11 = worldMatrix[5], m12 = worldMatrix[6];
     const m20 = worldMatrix[8], m21 = worldMatrix[9], m22 = worldMatrix[10];
     const m30 = worldMatrix[12], m31 = worldMatrix[13], m32 = worldMatrix[14];
 
-    // For very high vertex counts (>60,000 vertices), stride keeps calculation < 1ms
-    const stride = len > 180000 ? Math.ceil(len / 180000) * 3 : 3;
+    let minX = Infinity, minY = Infinity, minZ = Infinity;
+    let maxX = -Infinity, maxY = -Infinity, maxZ = -Infinity;
 
-    for (let i = 0; i < len; i += stride) {
-      const vx = vertices[i];
-      const vy = vertices[i + 1];
-      const vz = vertices[i + 2];
-      if (!isFinite(vx) || !isFinite(vy) || !isFinite(vz)) continue;
-
+    for (let i = 0; i < 8; i++) {
+      const vx = corners[i][0];
+      const vy = corners[i][1];
+      const vz = corners[i][2];
       const wx = m00 * vx + m10 * vy + m20 * vz + m30;
       const wy = m01 * vx + m11 * vy + m21 * vz + m31;
       const wz = m02 * vx + m12 * vy + m22 * vz + m32;
-
       if (wx < minX) minX = wx;
       if (wx > maxX) maxX = wx;
       if (wy < minY) minY = wy;
