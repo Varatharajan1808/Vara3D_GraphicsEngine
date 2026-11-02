@@ -1,7 +1,10 @@
-import { IndexedDBSceneStorage } from "../../engine/CoreUtilities/IndexedDBSceneStorage";
 import { CommandHistory, Command } from "../../engine/CoreUtilities/CommandHistory";
+import { ObjectClipboardController } from "../../engine/CoreUtilities/ObjectClipboardController";
+import { ObjectFactoryController } from "../../engine/CoreUtilities/ObjectFactoryController";
+import { ObjectDeleteController } from "../../engine/CoreUtilities/ObjectDeleteController";
+import { SceneImportExportController } from "../../engine/CoreUtilities/SceneImportExportController";
+import { SessionPersistenceController } from "../../engine/CoreUtilities/SessionPersistenceController";
 import { ObjectTransformSnapshot } from "../../engine/EventManager/SceneInteractionHandler";
-import { ZipArchiveLoader } from "../../engine/CoreUtilities/ZipArchiveLoader";
 import { EditorUIController } from "../../engine/UserInterface/EditorUIController";
 import { ViewHelper } from "../../engine/UserInterface/ViewHelper";
 import { WebGLRenderEngine } from "../../engine/Renderer/Webgl/WebGLRenderEngine";
@@ -12,14 +15,9 @@ import { TextureAssetLoader } from "../../engine/CoreUtilities/TextureAssetLoade
 import { GridHelper } from "../../engine/CoreUtilities/GridHelper";
 import { RenderableMeshObject } from "../../engine/MeshRenderer/RenderableMeshObject";
 import { BoxGeometryBuilder } from "../../engine/GeometryPrimitives/BoxGeometryBuilder";
-import { SphereGeometryBuilder } from "../../engine/GeometryPrimitives/SphereGeometryBuilder";
-import { PlaneGeometryBuilder } from "../../engine/GeometryPrimitives/PlaneGeometryBuilder";
-import { ConeGeometryBuilder } from "../../engine/GeometryPrimitives/ConeGeometryBuilder";
-import { CylinderGeometryBuilder } from "../../engine/GeometryPrimitives/CylinderGeometryBuilder";
 import { SceneLightingManager } from "../../engine/LightingEngine/SceneLightingManager";
 import { GLTFAssetLoader } from "../../engine/AssetImporter/GLTFAssetLoader";
 import { SceneInteractionHandler } from "../../engine/EventManager/SceneInteractionHandler";
-import { GLTFSceneExporter } from "../../engine/AssetImporter/GLTFSceneExporter";
 import { createProgram } from "../../engine/Renderer/Webgl/ShaderProgramLinker";
 import { PointLightNode } from "../../engine/LightingEngine/PointLightNode";
 import { SpotLightNode } from "../../engine/LightingEngine/SpotLightNode";
@@ -27,9 +25,6 @@ import { DirectionalLightNode } from "../../engine/LightingEngine/DirectionalLig
 import { SceneNode } from "../../engine/SceneGraph/SceneNode";
 import { LightNode } from "../../engine/LightingEngine/LightNode";
 import {
-  PointLightvsShader, PointLightfsShader,
-  SpotLightvsShader, SpotLightfsShader,
-  DirLightvsShader, DirLightfsShader,
   UnifiedLightvsShader,
   UnifiedLightfsShader,
 } from "../../engine/Renderer/Shaders/GLSLShaderLibrary";
@@ -215,30 +210,16 @@ let lastSelectionCacheKey: string = "";
 let previousSelectedUUID: string | null = null;
 
 // ============================================================================
-// Auto-Save System (IndexedDB Background Storage)
+// Auto-Save System (IndexedDB — logic in SessionPersistenceController)
 // ============================================================================
-let autoSaveTimeout: any = null;
-function getCameraOrbitState() {
-  return {
-    rotationX: events.rotationX,
-    rotationY: events.rotationY,
-    radius: events.cameraRadiuscam,
-  };
-}
+let sessionPersistence: SessionPersistenceController;
 
 function triggerAutoSave() {
-  if (autoSaveTimeout) clearTimeout(autoSaveTimeout);
-  autoSaveTimeout = setTimeout(async () => {
-    try {
-      await IndexedDBSceneStorage.saveScene(scene, camera, getCameraOrbitState());
-    } catch (err) {
-      console.warn("[AutoSave] Error saving to IndexedDB:", err);
-    }
-  }, 1000);
+  sessionPersistence?.triggerAutoSave();
 }
 
 window.addEventListener("beforeunload", () => {
-  IndexedDBSceneStorage.saveScene(scene, camera, getCameraOrbitState());
+  sessionPersistence?.saveNow();
 });
 
 events.onViewChange = () => {
@@ -394,107 +375,6 @@ events.onGeometryChange = (mesh, prevVertices, newVertices) => {
   triggerAutoSave();
 };
 
-function executeDeleteObjects(nodes: SceneNode[]) {
-  if (!nodes || nodes.length === 0) return;
-
-  const records = nodes.map((node) => ({
-    node,
-    parent: node.parent || null,
-  }));
-
-  commandHistory.execute({
-    name: nodes.length > 1 ? `Delete ${nodes.length} Objects` : `Delete ${nodes[0]?.name || "Object"}`,
-    execute: () => {
-      for (const rec of records) {
-        // Recursively remove tracking from createdObjects and lightInstances
-        const deleteTrackingRecursive = (n: SceneNode) => {
-          createdObjects.delete(n.uuid);
-          if (lightInstances.has(n.uuid)) {
-            lightInstances.delete(n.uuid);
-          }
-          if (n.children) {
-            for (const child of n.children) {
-              deleteTrackingRecursive(child);
-            }
-          }
-        };
-        deleteTrackingRecursive(rec.node);
-
-        // SceneHierarchyManager.remove recursively removes node and all descendant meshes/lights
-        scene.remove(rec.node);
-      }
-
-      // Check if selectedObject (or items in events.select) was inside any deleted node
-      const isDescendantOrSelf = (target: any, root: SceneNode): boolean => {
-        if (!target || !root) return false;
-        if (target === root || target.uuid === root.uuid) return true;
-        if (root.children) {
-          for (const child of root.children) {
-            if (isDescendantOrSelf(target, child)) return true;
-          }
-        }
-        return false;
-      };
-
-      const selectedWasDeleted = records.some((rec) =>
-        (selectedObject && isDescendantOrSelf(selectedObject, rec.node)) ||
-        events.select.some((s: any) => isDescendantOrSelf(s, rec.node))
-      );
-
-      if (selectedWasDeleted) {
-        deselectInEditor();
-      }
-
-      updateSceneGraph();
-      triggerAutoSave();
-    },
-    undo: () => {
-      for (const rec of records) {
-        scene.add(rec.node);
-        if (rec.parent) {
-          rec.node.setParent(rec.parent);
-        }
-        const addTrackingRecursive = (n: SceneNode) => {
-          if (n instanceof RenderableMeshObject) {
-            createdObjects.set(n.uuid, n);
-          }
-          if (n.children) {
-            for (const child of n.children) {
-              addTrackingRecursive(child);
-            }
-          }
-        };
-        addTrackingRecursive(rec.node);
-      }
-      if (records.length === 1) {
-        selectSingleObject(records[0].node);
-      } else {
-        const meshes: RenderableMeshObject[] = [];
-        const collectMeshes = (n: SceneNode) => {
-          if (n instanceof RenderableMeshObject) meshes.push(n);
-          if (n.children) n.children.forEach(collectMeshes);
-        };
-        records.forEach((r) => collectMeshes(r.node));
-
-        if (meshes.length > 0) {
-          events.select = meshes;
-          events.selectedObject = meshes[0];
-          events.isObjectSelected = true;
-          events.updateGizmoPositionForMultiSelection();
-          if (events.gizmo) events.gizmo.visible = true;
-          uiManager.selectObjects(meshes.map((m) => m.uuid));
-        }
-      }
-      updateSceneGraph();
-      triggerAutoSave();
-    }
-  }, true);
-}
-
-events.onDeleteNodes = (nodes) => {
-  executeDeleteObjects(nodes);
-};
-
 // Handle Grid changes
 uiManager.onGridChange((settings) => {
   if (settings.size !== currentGridSettings.size || settings.spacing !== currentGridSettings.spacing) {
@@ -517,7 +397,34 @@ uiManager.onGridChange((settings) => {
 // Store references to created objects
 const createdObjects: Map<string, any> = new Map();
 let selectedObject: any = null;
-console.log(selectedObject);
+
+sessionPersistence = new SessionPersistenceController({
+  scene,
+  camera,
+  events,
+  createdObjects,
+  gl,
+  material,
+});
+
+// Undoable delete (confirm UI stays below in this file)
+const objectDelete = new ObjectDeleteController({
+  scene,
+  events,
+  commandHistory,
+  createdObjects,
+  lightInstances,
+  getSelectedObject: () => selectedObject,
+  findObjectByUUID,
+  updateSceneGraph,
+  selectSingleObject,
+  deselectInEditor,
+  uiManager,
+  triggerAutoSave,
+});
+events.onDeleteNodes = (nodes) => {
+  objectDelete.deleteNodes(nodes);
+};
 
 // Scene graph update counter
 let frameCount = 0;
@@ -632,9 +539,9 @@ uiManager.onNodeVisibility((uuid: string, visible: boolean) => {
   }, true);
 });
 
-// Handle node deletion from scene graph
+// Handle node deletion from scene graph (trash icon — confirm optional upstream)
 uiManager.onNodeDelete((uuid: string) => {
-  deleteObjectFromScene(uuid);
+  objectDelete.deleteByUUID(uuid);
 });
 
 // Handle object selection from Scene Graph tree UI
@@ -926,6 +833,32 @@ function rgbToHex(r: number, g: number, b: number): string {
   return `#${toHex(r)}${toHex(g)}${toHex(b)}`;
 }
 
+// Copy / Paste / Duplicate (Ctrl+C / Ctrl+V / Ctrl+D)
+const objectClipboard = new ObjectClipboardController({
+  scene,
+  camera,
+  events,
+  commandHistory,
+  createdObjects,
+  lightInstances,
+  getSelectedObject: () => selectedObject,
+  setSelectedObject: (obj) => {
+    selectedObject = obj;
+  },
+  getPreviousSelectedUUID: () => previousSelectedUUID,
+  setPreviousSelectedUUID: (uuid) => {
+    previousSelectedUUID = uuid;
+  },
+  findObjectByUUID,
+  updateSceneGraph,
+  updateObjectProperties,
+  selectSingleObject,
+  deselectInEditor,
+  uiManager,
+  triggerAutoSave,
+});
+objectClipboard.bindKeyboard();
+
 // Initialize scene graph
 updateSceneGraph();
 
@@ -1134,215 +1067,36 @@ document.addEventListener("keydown", (e) => {
   }
 });
 
-// Handle adding objects
-// Reusable function to handle adding objects
-function handleAddObject(type: string, subtype: string) {
-  if (type === "mesh") {
-    let geometryData: any = null;
-
-    switch (subtype) {
-      case "box":
-        const boxGeometry = new BoxGeometryBuilder();
-        geometryData = boxGeometry.CubeData();
-        break;
-      case "sphere":
-        const sphereGeometry = new SphereGeometryBuilder();
-        geometryData = sphereGeometry.SphereData();
-        break;
-      case "plane":
-        const planeGeometry = new PlaneGeometryBuilder();
-        geometryData = planeGeometry.PlaneData();
-        break;
-      case "cone":
-        const coneGeometry = new ConeGeometryBuilder();
-        geometryData = coneGeometry.ConeData(2.0, 1.0, 31);
-        break;
-      case "cylinder":
-        const cylinderGeometry = new CylinderGeometryBuilder();
-        geometryData = cylinderGeometry.CylinderData();
-        break;
-      default:
-        return;
-    
-    }
-
-    if (!geometryData) return;
-
-    // Create a new material instance for each mesh to avoid shared references
-    const meshMaterial = material.getMaterialProperties({
-      color: MaterialColor.white,
-      metallic: 0.5,
-      roughness: 0.5,
-      specular: 16.0,
-      alpha: 1.0,
-      emissionColor: [0.0, 0.0, 0.0],
-      emissionIntensity: 0.0,
-    });
-
-    const mesh = new RenderableMeshObject(geometryData, meshMaterial);
-    // Position mesh at origin (camera is looking at origin from z=10)
-    mesh.position = { x: 0, y: 0, z: 0 };
-    mesh.scale = { x: 1, y: 1, z: 1 };
-    mesh.rotate = { x: 0, y: 0, z: 0 };
-    mesh.updateTranslate();
-    mesh.updateScale();
-    // Update bounding box after setting position/scale
-    if (mesh.updateBoundingBox) {
-      mesh.updateBoundingBox();
-    }
-    // Ensure geometry needs update flag is set
-    mesh.geometryNeedsUpdate = true;
-    scene.add(mesh);
-    createdObjects.set(mesh.uuid, mesh);
-    updateSceneGraph();
-
-    // Select the newly added mesh
-    selectedObject = mesh;
-    previousSelectedUUID = mesh.uuid;
-    updateObjectProperties(mesh);
-
-    // Also select it in the events system
-    events.selectedObject = mesh;
-    events.isObjectSelected = true;
-    events.select = [mesh];
-    // Start with translate tool active if none
-    if (events.gizmo && !events.gizmo.currentGizmoType) {
-      events.gizmo.setMode("translate");
-    }
-    if (events.gizmo) events.gizmo.visible = true;
-
-    if (events.webgl) {
-      events.webgl.selectedObject = mesh;
-    }
-
-    commandHistory.execute({
-      name: `Add ${subtype}`,
-      execute: () => {
-        scene.add(mesh);
-        createdObjects.set(mesh.uuid, mesh);
-        selectSingleObject(mesh);
-        updateSceneGraph();
-      },
-      undo: () => {
-        scene.remove(mesh);
-        createdObjects.delete(mesh.uuid);
-        if (selectedObject === mesh || events.select.some((o: any) => o.uuid === mesh.uuid)) {
-          deselectInEditor();
-        }
-        updateSceneGraph();
-      }
-    }, false);
-  } else if (type === "light") {
-    // Add new light based on subtype as a SceneNode
-    let newLight: LightNode | null = null;
-    const lightIndex = scene.lights.length + 1;
-
-    switch (subtype) {
-      case "point":
-        newLight = new PointLightNode(`Point Light`);
-        newLight.position = { x: 0, y: 3, z: 0 };
-        (newLight as PointLightNode).radius = 2.0;
-        program = unifiedProgram;
-        break;
-      case "spot":
-        newLight = new SpotLightNode(`Spot Light`);
-        newLight.position = { x: 0, y: 0, z: 2 };
-        (newLight as SpotLightNode).direction = [0, 0, -1];
-        (newLight as SpotLightNode).angle = Math.PI / 7;
-        program = unifiedProgram;
-        break;
-      case "directional":
-        newLight = new DirectionalLightNode(`Directional Light`);
-        (newLight as DirectionalLightNode).direction = [0, 0, 1];
-        program = unifiedProgram;
-        break;
-    }
-
-    if (newLight) {
-      newLight.color = [1, 1, 1];
-      newLight.intensity = 1.0;
-      newLight.updateLocalMatrix();
-      scene.add(newLight);
-
-      // Select the newly added light
-      selectedObject = newLight;
-      previousSelectedUUID = newLight.uuid;
-      updateObjectProperties(newLight);
-      uiManager.selectObject(newLight.uuid);
-
-      const addedLight = newLight;
-      commandHistory.execute({
-        name: `Add ${subtype} Light`,
-        execute: () => {
-          scene.add(addedLight);
-          selectSingleObject(addedLight);
-          updateSceneGraph();
-        },
-        undo: () => {
-          scene.remove(addedLight);
-          if (selectedObject === addedLight) {
-            deselectInEditor();
-          }
-          updateSceneGraph();
-        }
-      }, false);
-    }
-
-    gl.useProgram(program);
-    updateSceneGraph();
-  } else if (type === "camera") {
-    if (subtype === "orthographic") {
-      const aspect = canvas.clientWidth / canvas.clientHeight;
-      // Calculate a sensible orthoSize based on current camera distance to maintain zoom perspective
-      const distance = Math.sqrt(
-        camera.eye.x * camera.eye.x +
-        camera.eye.y * camera.eye.y +
-        camera.eye.z * camera.eye.z
-      );
-      // For Perspective FOV 45, the visible height at distance D is 2 * D * tan(22.5 deg)
-      // orthoSize is half-height, so D * tan(22.5 deg)
-      camera.orthoSize = distance * Math.tan((45 * Math.PI) / 360);
-      camera.OrthographicCamera(aspect);
-    } else {
-      // If switching back from ortho, calculate eye distance based on orthoSize
-      const aspect = canvas.clientWidth / canvas.clientHeight;
-      const distance = camera.orthoSize / Math.tan((45 * Math.PI) / 360);
-
-      // We need to keep the direction vector from eye to center
-      const currentEyeVec = [camera.eye.x, camera.eye.y, camera.eye.z];
-      const currentDist = Math.sqrt(currentEyeVec[0] ** 2 + currentEyeVec[1] ** 2 + currentEyeVec[2] ** 2);
-
-      if (currentDist > 0.0001) {
-        const factor = distance / currentDist;
-        camera.eye.x *= factor;
-        camera.eye.y *= factor;
-        camera.eye.z *= factor;
-      } else {
-        camera.eye.z = distance;
-      }
-
-      camera.PerspectiveCamera(45, aspect, 0.1, 1000);
-      // Sync events system parameters
-      events.updateOrbitParametersFromEye(camera);
-    }
-
-    // Ensure camera view matrix is updated (maintains same look-at angle)
-    camera.OrbitCamera();
-
-    // Update UI if camera is selected
-    if (selectedObject === camera) {
-      updateObjectProperties(camera);
-    }
-    updateSceneGraph();
-  }
-}
-
-// Handle adding objects via UI
-uiManager.onAddObject(handleAddObject);
-
-// Handle adding objects via Keyboard Shortcuts (from SceneInteractionHandler)
-// Handle adding objects via Keyboard Shortcuts (from SceneInteractionHandler)
-events.onAddObject = handleAddObject;
+// Add mesh / light / camera projection (UI + Shift+A shortcuts)
+const objectFactory = new ObjectFactoryController({
+  scene,
+  camera,
+  canvas,
+  gl,
+  events,
+  commandHistory,
+  createdObjects,
+  material,
+  materialColors: MaterialColor,
+  unifiedProgram,
+  getProgram: () => program,
+  setProgram: (p) => {
+    program = p;
+  },
+  getSelectedObject: () => selectedObject,
+  setSelectedObject: (obj) => {
+    selectedObject = obj;
+  },
+  setPreviousSelectedUUID: (uuid) => {
+    previousSelectedUUID = uuid;
+  },
+  updateSceneGraph,
+  updateObjectProperties,
+  selectSingleObject,
+  deselectInEditor,
+  uiManager,
+});
+objectFactory.bind();
 
 // Handle Context Menu (Shift + A)
 events.onOpenAddMenu = () => {
@@ -1369,7 +1123,7 @@ document.getElementById("new-scene-btn")?.addEventListener("click", () => {
     cancelText: "Cancel",
     isDanger: true,
     onConfirm: () => {
-      IndexedDBSceneStorage.clearSavedScene();
+      sessionPersistence.clearSavedScene();
       // Clear all scene data
     scene.nodes = [];
     scene.objects = [];
@@ -1466,59 +1220,15 @@ document.getElementById("new-scene-btn")?.addEventListener("click", () => {
   });
 });
 
-// Unified model loader for files, folders, and .zip archives
-async function loadModelFromFiles(inputFiles: File[] | FileList): Promise<void> {
-  const files: File[] = Array.from(inputFiles);
-  if (files.length === 0) return;
-
-  let fileMap = new Map<string, File>();
-  let gltfFile: File | null = null;
-
-  // Check if a .zip archive was provided
-  const zipFile = files.find((f) => f.name.toLowerCase().endsWith(".zip"));
-  if (zipFile) {
-    try {
-      fileMap = await ZipArchiveLoader.unzipModelArchive(zipFile);
-      for (const [name, file] of fileMap) {
-        if (name.endsWith(".gltf") || name.endsWith(".glb")) {
-          gltfFile = file;
-          break;
-        }
-      }
-      if (!gltfFile) {
-        uiManager.showAlert("ZIP Archive", "No .gltf or .glb model file found inside the ZIP archive.");
-        return;
-      }
-    } catch (err) {
-      uiManager.showAlert("ZIP Extraction Error", (err as Error).message);
-      return;
-    }
-  } else {
-    for (let i = 0; i < files.length; i++) {
-      const file = files[i];
-      fileMap.set(file.name, file);
-      if (file.name.endsWith(".gltf") || file.name.endsWith(".glb")) {
-        gltfFile = file;
-      }
-    }
-    if (!gltfFile) gltfFile = files[0];
-  }
-
-  const url = URL.createObjectURL(gltfFile);
-  try {
-    await loader.main([url], fileMap);
-    updateSceneGraph();
-    triggerAutoSave();
-    if (loader.lastImportedRoot) {
-      selectSingleObject(loader.lastImportedRoot);
-    }
-  } catch (error) {
-    console.error("Error loading model:", error);
-    uiManager.showAlert("Import Error", `Failed to load model: ${(error as Error).message}`);
-  } finally {
-    URL.revokeObjectURL(url);
-  }
-}
+// Import / export logic (DOM listeners stay here)
+const sceneImportExport = new SceneImportExportController({
+  scene,
+  loader,
+  uiManager,
+  updateSceneGraph,
+  triggerAutoSave,
+  selectSingleObject,
+});
 
 // Handle GLTF / GLB / ZIP file import
 document.getElementById("import-gltf-btn")?.addEventListener("click", () => {
@@ -1529,7 +1239,7 @@ document.getElementById("import-gltf-btn")?.addEventListener("click", () => {
 document.getElementById("gltf-file-input")?.addEventListener("change", async (e) => {
   const files = (e.target as HTMLInputElement).files;
   if (files && files.length > 0) {
-    await loadModelFromFiles(files);
+    await sceneImportExport.loadModelFromFiles(files);
     (e.target as HTMLInputElement).value = "";
   }
 });
@@ -1543,7 +1253,7 @@ document.getElementById("import-gltf-folder-btn")?.addEventListener("click", () 
 document.getElementById("gltf-folder-input")?.addEventListener("change", async (e) => {
   const files = (e.target as HTMLInputElement).files;
   if (files && files.length > 0) {
-    await loadModelFromFiles(files);
+    await sceneImportExport.loadModelFromFiles(files);
     (e.target as HTMLInputElement).value = "";
   }
 });
@@ -1561,77 +1271,20 @@ viewportContainer.addEventListener("dragleave", () => {
   viewportContainer.classList.remove("drag-over");
 });
 
-// Recursive folder & file reader for smooth Drag-and-Drop without browser security warnings
-async function extractDroppedFiles(dataTransfer: DataTransfer): Promise<File[]> {
-  const fileList: File[] = [];
-  const items = dataTransfer.items;
-
-  async function readAllEntries(dirReader: any): Promise<any[]> {
-    const entries: any[] = [];
-    const read = async () => {
-      const batch: any[] = await new Promise((resolve, reject) => dirReader.readEntries(resolve, reject));
-      if (batch.length > 0) {
-        entries.push(...batch);
-        await read();
-      }
-    };
-    await read();
-    return entries;
-  }
-
-  async function traverseEntry(entry: any): Promise<void> {
-    if (!entry) return;
-    if (entry.isFile) {
-      const file = await new Promise<File>((resolve, reject) => entry.file(resolve, reject));
-      fileList.push(file);
-    } else if (entry.isDirectory) {
-      const dirReader = entry.createReader();
-      const entries = await readAllEntries(dirReader);
-      for (const child of entries) {
-        await traverseEntry(child);
-      }
-    }
-  }
-
-  if (items && items.length > 0) {
-    const promises: Promise<void>[] = [];
-    for (let i = 0; i < items.length; i++) {
-      const item = items[i];
-      if (typeof item.webkitGetAsEntry === "function") {
-        const entry = item.webkitGetAsEntry();
-        if (entry) {
-          promises.push(traverseEntry(entry));
-          continue;
-        }
-      }
-      const file = item.getAsFile();
-      if (file) fileList.push(file);
-    }
-    await Promise.all(promises);
-  } else if (dataTransfer.files) {
-    for (let i = 0; i < dataTransfer.files.length; i++) {
-      fileList.push(dataTransfer.files[i]);
-    }
-  }
-  return fileList;
-}
-
 viewportContainer.addEventListener("drop", async (e) => {
   e.preventDefault();
   viewportContainer.classList.remove("drag-over");
   if (!e.dataTransfer) return;
 
-  const files = await extractDroppedFiles(e.dataTransfer);
+  const files = await sceneImportExport.extractDroppedFiles(e.dataTransfer);
   if (files && files.length > 0) {
-    await loadModelFromFiles(files);
+    await sceneImportExport.loadModelFromFiles(files);
   }
 });
 
 // Handle GLTF export
 document.getElementById("export-gltf-btn")?.addEventListener("click", () => {
-  const gltfExport = new GLTFSceneExporter();
-  const gltf = gltfExport.exportSceneToGLTF(scene);
-  gltfExport.saveGLTF("exported_scene", gltf);
+  sceneImportExport.exportScene();
 });
 
 // Handle texture loading
@@ -1681,14 +1334,7 @@ document.getElementById("normal-file-input")?.addEventListener("change", async (
   }
 });
 
-// Handle delete from scene graph
-function deleteObjectFromScene(uuid: string) {
-  const targetNode = findObjectByUUID(uuid);
-  if (!targetNode) return;
-  executeDeleteObjects([targetNode]);
-}
-
-// Add delete functionality to scene graph items
+// Scene-graph context-menu delete (UI confirm stays here)
 document.addEventListener("contextmenu", (e) => {
   const target = e.target as HTMLElement;
   const treeItem = target.closest(".tree-item") as HTMLElement;
@@ -1701,13 +1347,13 @@ document.addEventListener("contextmenu", (e) => {
       confirmText: "Delete",
       isDanger: true,
       onConfirm: () => {
-        deleteObjectFromScene(itemUuid);
+        objectDelete.deleteByUUID(itemUuid);
       }
     });
   }
 });
 
-// Single Delete/Backspace path for viewport + keyboard (same as scene-graph trash)
+// Delete/Backspace (confirm UI here → logic in ObjectDeleteController)
 document.addEventListener("keydown", (e) => {
   if (e.key !== "Delete" && e.key !== "Backspace") return;
   if (
@@ -1745,7 +1391,7 @@ document.addEventListener("keydown", (e) => {
     confirmText: "Delete",
     isDanger: true,
     onConfirm: () => {
-      executeDeleteObjects(toDelete);
+      objectDelete.deleteNodes(toDelete);
     },
   });
 });
@@ -2077,7 +1723,7 @@ function animate() {
   requestAnimationFrame(animate);
 }
 
-// Global Keyboard Shortcuts for Undo / Redo (Ctrl+Z, Ctrl+Y, Ctrl+Shift+Z)
+// Global Keyboard Shortcuts: Undo / Redo
 window.addEventListener("keydown", (e: KeyboardEvent) => {
   if (
     e.target instanceof HTMLInputElement ||
@@ -2087,8 +1733,11 @@ window.addEventListener("keydown", (e: KeyboardEvent) => {
     return;
   }
 
+  const mod = e.ctrlKey || e.metaKey;
+  const key = e.key.toLowerCase();
+
   // Undo: Ctrl+Z or Cmd+Z (without Shift)
-  if ((e.ctrlKey || e.metaKey) && !e.shiftKey && (e.key === "z" || e.key === "Z")) {
+  if (mod && !e.shiftKey && key === "z") {
     e.preventDefault();
     e.stopPropagation();
     commandHistory.undo();
@@ -2096,10 +1745,7 @@ window.addEventListener("keydown", (e: KeyboardEvent) => {
   }
 
   // Redo: Ctrl+Y or Cmd+Y, or Ctrl+Shift+Z / Cmd+Shift+Z
-  if (
-    ((e.ctrlKey || e.metaKey) && (e.key === "y" || e.key === "Y")) ||
-    ((e.ctrlKey || e.metaKey) && e.shiftKey && (e.key === "z" || e.key === "Z"))
-  ) {
+  if ((mod && key === "y") || (mod && e.shiftKey && key === "z")) {
     e.preventDefault();
     e.stopPropagation();
     commandHistory.redo();
@@ -2109,45 +1755,10 @@ window.addEventListener("keydown", (e: KeyboardEvent) => {
 
 // Wait for IndexedDB restore (or add defaults) BEFORE first render — prevents deleted-cube flash
 (async () => {
-  let restored = false;
-  try {
-    const saved = await IndexedDBSceneStorage.loadScene();
-    if (saved && saved.nodes && saved.nodes.length > 0) {
-      console.log(`[IndexedDB] Restoring saved session from ${new Date(saved.timestamp).toLocaleTimeString()}...`);
-      await IndexedDBSceneStorage.restoreScene(
-        saved,
-        scene,
-        createdObjects,
-        gl,
-        material,
-        camera
-      );
-      // Sync orbit controller with restored camera (otherwise animate() overwrites eye)
-      if (saved.camera) {
-        if (
-          typeof saved.camera.rotationX === "number" &&
-          typeof saved.camera.rotationY === "number" &&
-          typeof saved.camera.radius === "number"
-        ) {
-          events.rotationX = saved.camera.rotationX;
-          events.rotationY = saved.camera.rotationY;
-          events.cameraRadiuscam = saved.camera.radius;
-          events.scalervalue = saved.camera.radius;
-        } else {
-          events.updateOrbitParametersFromEye(camera);
-        }
-      }
-      restored = true;
-      console.log("[IndexedDB] Session successfully restored!");
-    }
-  } catch (err) {
-    console.warn("[IndexedDB] Session auto-restore error:", err);
-  }
-
+  const restored = await sessionPersistence.tryRestoreSession();
   if (!restored) {
     addDefaultStarterContent();
   }
-
   updateSceneGraph();
   animate();
 })();
