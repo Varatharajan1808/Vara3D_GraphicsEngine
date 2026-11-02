@@ -1,4 +1,4 @@
-import { CommandHistory, Command } from "../../engine/CoreUtilities/CommandHistory";
+import { CommandHistory } from "../../engine/CoreUtilities/CommandHistory";
 import { ObjectClipboardController } from "../../engine/CoreUtilities/ObjectClipboardController";
 import { ObjectFactoryController } from "../../engine/CoreUtilities/ObjectFactoryController";
 import { ObjectDeleteController } from "../../engine/CoreUtilities/ObjectDeleteController";
@@ -6,7 +6,10 @@ import { SceneImportExportController } from "../../engine/CoreUtilities/SceneImp
 import { SessionPersistenceController } from "../../engine/CoreUtilities/SessionPersistenceController";
 import { ObjectTransformSnapshot } from "../../engine/EventManager/SceneInteractionHandler";
 import { EditorUIController } from "../../engine/UserInterface/EditorUIController";
-import { ViewHelper } from "../../engine/UserInterface/ViewHelper";
+import {
+  StandaloneViewCube,
+  IViewCubeCamera,
+} from "../../engine/UserInterface/StandaloneViewCube";
 import { WebGLRenderEngine } from "../../engine/Renderer/Webgl/WebGLRenderEngine";
 import { CameraController } from "../../engine/CameraSystem/CameraController";
 import { SceneHierarchyManager } from "../../engine/SceneGraph/SceneHierarchyManager";
@@ -150,9 +153,41 @@ const loader = new GLTFAssetLoader(gl, scene);
 // Initialize events
 const events = new SceneInteractionHandler(scene, camera, canvas, gl);
 
-// Initialize View Helper
+// Initialize View Cube (replaces SVG axis helper)
 const viewportContainer = document.getElementById("viewport-container") as HTMLElement;
-const viewHelper = new ViewHelper(viewportContainer, camera, events);
+
+const applyOrbitFromEvents = () => {
+  const pos = events.controlEvent();
+  camera.eye = { x: pos[0], y: pos[1], z: pos[2] };
+  camera.OrbitCamera();
+};
+
+const viewCubeCamera: IViewCubeCamera = {
+  get yaw() {
+    return (events.rotationX * events.sensitivity * Math.PI) / 180;
+  },
+  set yaw(v: number) {
+    events.rotationX = (v * 180) / Math.PI / events.sensitivity;
+  },
+  get pitch() {
+    return (events.rotationY * events.sensitivity * Math.PI) / 180;
+  },
+  set pitch(v: number) {
+    events.rotationY = (v * 180) / Math.PI / events.sensitivity;
+  },
+  get viewMatrix() {
+    return camera.viewMatrix;
+  },
+  canvas,
+  updateUniforms: applyOrbitFromEvents,
+  onViewChange: () => {
+    if (typeof events.onViewChange === "function") {
+      events.onViewChange();
+    }
+  },
+};
+
+const viewCube = new StandaloneViewCube(viewCubeCamera, viewportContainer);
 
 // Synchronize viewport selection with UI
 events.onSelect = (uuid) => {
@@ -204,7 +239,6 @@ const uiManager = new EditorUIController();
 // ============================================================================
 // Core Undo / Redo System & Helper Functions
 // ============================================================================
-let previousSelectionSignature: string = "";
 let cachedSelectedUUIDs: Set<string> = new Set();
 let lastSelectionCacheKey: string = "";
 let previousSelectedUUID: string | null = null;
@@ -263,7 +297,6 @@ function findObjectByUUID(uuid: string): any {
 function selectSingleObject(obj: any) {
   selectedObject = obj;
   previousSelectedUUID = obj.uuid;
-  previousSelectionSignature = obj.uuid;
   updateObjectProperties(obj);
   if (obj instanceof RenderableMeshObject || (obj instanceof SceneNode && !(obj instanceof LightNode))) {
     events.selectedObject = obj;
@@ -291,7 +324,6 @@ function selectSingleObject(obj: any) {
 function deselectInEditor() {
   selectedObject = null;
   previousSelectedUUID = null;
-  previousSelectionSignature = "";
   events.deselectObject();
   clearObjectProperties();
   uiManager.selectObject(null);
@@ -1615,8 +1647,8 @@ document.getElementById("webgl-toggle")?.addEventListener("click", (e) => {
   }
 });
 function animate() {
-  // Update view helper animations and rendering
-  viewHelper.update();
+  // Sync view cube when orbit changes from viewport drag
+  viewCube.requestRender();
 
   const controls = events.controlEvent();
   const isGizmoDragging = events.isGizmoInteraction;

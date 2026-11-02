@@ -47,20 +47,6 @@ interface PointLightParams {
     intensity: number;
 }
 
-interface SpotLightParams {
-    lightPosition: number[];
-    spotLightDirection: number[];
-    spotLightAngle: number;
-    lightColor: number[];
-    intensity: number;
-}
-
-interface DirectionalLightParams {
-    lightDirection: number[];
-    lightColor: number[];
-    intensity: number;
-}
-
 export class SceneLightingManager {
     uuid: string;
     gl: WebGLRenderingContext;
@@ -115,21 +101,5 @@ export class SceneLightingManager {
         point.radius.push(radius);
         point.color.push(new Float32Array(lightColor));
         point.intensity.push(intensity);
-    }
-
-    SpotLight({ lightPosition, spotLightDirection, spotLightAngle, lightColor, intensity }: SpotLightParams): void {
-        const { spot } = this.lightData;
-        spot.position.push(new Float32Array(lightPosition));
-        spot.direction.push(new Float32Array(spotLightDirection));
-        spot.angle.push(spotLightAngle);
-        spot.color.push(new Float32Array(lightColor));
-        spot.intensity.push(intensity);
-    }
-
-    DirectionalLight({ lightDirection, lightColor, intensity }: DirectionalLightParams): void {
-        const { directional } = this.lightData;
-        directional.direction.push(new Float32Array(lightDirection));
-        directional.color.push(new Float32Array(lightColor));
-        directional.intensity.push(intensity);
     }
 }

@@ -9,7 +9,6 @@ import { mat4, vec3, vec4 } from "../MathLibrary/gl-matrix.js";
 import { CameraController } from "../CameraSystem/CameraController";
 import { TransformGizmoController } from "../CoreUtilities/TransformGizmoController";
 import { RenderableMeshObject } from "../MeshRenderer/RenderableMeshObject";
-import { GLTFSceneExporter } from "../AssetImporter/GLTFSceneExporter";
 import { WebGLRenderEngine } from "../Renderer/Webgl/WebGLRenderEngine";
 import { SceneHierarchyManager } from "../SceneGraph/SceneHierarchyManager";
 
@@ -180,20 +179,6 @@ export class SceneInteractionHandler {
     this.updateUI(this, UUID, Type);
     this.initBoundingBoxes();
     this.events();
-
-    this.#setupExportButton();
-  }
-  #setupExportButton() {
-    document.addEventListener("DOMContentLoaded", () => {
-      const exportBtn = document.getElementById("exportBtn");
-      if (exportBtn) {
-        exportBtn.addEventListener("click", () => {
-          const gltfExport = new GLTFSceneExporter();
-          const gltf = gltfExport.exportSceneToGLTF(this.scene);
-          gltfExport.saveGLTF("exported_scene", gltf);
-        });
-      }
-    });
   }
   getNormalizedMousePos(
     canvas: HTMLCanvasElement,

@@ -102,12 +102,6 @@ export class CommandHistory {
     return this.redoStack[this.redoStack.length - 1]?.name;
   }
 
-  public clear(): void {
-    this.undoStack = [];
-    this.redoStack = [];
-    this.notify();
-  }
-
   public onChange(listener: HistoryChangeListener): void {
     this.listeners.push(listener);
     listener(this.canUndo(), this.canRedo(), this.getUndoName(), this.getRedoName());

@@ -3,11 +3,6 @@ export interface BoundingSphere {
   radius: number;
 }
 
-export interface BoundingBox {
-  min: [number, number, number] | number[];
-  max: [number, number, number] | number[];
-}
-
 export function createBoundingSphere(
   center: [number, number, number],
   radius: number

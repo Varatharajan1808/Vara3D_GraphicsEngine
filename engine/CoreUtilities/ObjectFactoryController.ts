@@ -172,7 +172,6 @@ export class ObjectFactoryController {
   private addLight(subtype: string): void {
     const {
       scene,
-      events,
       commandHistory,
       unifiedProgram,
       gl,

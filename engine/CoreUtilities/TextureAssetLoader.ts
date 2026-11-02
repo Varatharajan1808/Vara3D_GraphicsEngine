@@ -1,4 +1,3 @@
-import { NormalsData } from "../GeometryPrimitives/SurfaceNormalCalculator"; // Replace with actual path
 import { SceneHierarchyManager } from "../SceneGraph/SceneHierarchyManager";
 interface TextureData {
   texture: WebGLTexture | null;
@@ -29,47 +28,6 @@ export class TextureAssetLoader {
     this.srcType = gl.UNSIGNED_BYTE;
     this.pixel = new Uint8Array([255, 255, 255, 255]); // white
 
-  }
-
-  loadTexture(gl: WebGLRenderingContext, url: string) {
-    const texture = gl.createTexture();
-    gl.bindTexture(gl.TEXTURE_2D, texture);
-
-    gl.texImage2D(
-      gl.TEXTURE_2D,
-      this.level,
-      this.internalFormat,
-      this.width,
-      this.height,
-      this.border,
-      this.srcFormat,
-      this.srcType,
-      this.pixel
-    );
-
-    const image = new Image();
-    image.onload = () => {
-      gl.bindTexture(gl.TEXTURE_2D, texture);
-      gl.texImage2D(
-        gl.TEXTURE_2D,
-        this.level,
-        this.internalFormat,
-        this.srcFormat,
-        this.srcType,
-        image
-      );
-
-      if (this.isPowerOf2(image.width) && this.isPowerOf2(image.height)) {
-        gl.generateMipmap(gl.TEXTURE_2D);
-      } else {
-        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
-        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
-        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
-      }
-    };
-    image.src = url;
-
-    return texture;
   }
 
   isPowerOf2(value: number): boolean {
@@ -158,60 +116,5 @@ export class TextureAssetLoader {
 
       image.src = url;
     });
-  }
-
-  async loadAndCreateMesh(
-    mesh: any,
-    options: {
-      imageUrl?: string | null;
-      normalImageUrl?: string | null;
-      geometry: any;
-      material: any;
-      normals?: any;
-    }
-  ): Promise<void> {
-    const {
-      imageUrl,
-      normalImageUrl,
-      geometry,
-      material,
-      normals = NormalsData,
-    } = options;
-
-    let base64Image: string | null = null;
-
-    if (imageUrl) {
-      const textureData = await this.loadTextureAsync(imageUrl);
-      base64Image = textureData.base64Image;
-      mesh.image = base64Image;
-      mesh.texture = textureData.texture; // Optional: keep WebGL texture reference
-    }
-
-    if (normalImageUrl) {
-      const normalData = await this.loadTextureAsync(normalImageUrl);
-      base64Image = normalData.base64Image;
-      mesh.normalMapImage = base64Image;
-      mesh.normalMapTexture = normalData.texture;
-    }
-
-    // Update mesh properties
-    mesh.geometry = geometry;
-    mesh.material = material;
-    mesh.normals = normals;
-  }
-
-  async loadAllMeshes(scene: { objects: any[] }): Promise<void> {
-    const existingMeshes = scene.objects;
-    const meshPromises = existingMeshes.map((mesh) =>
-      this.loadAndCreateMesh(mesh, {
-        imageUrl: mesh.textureURL || null,
-        normalImageUrl: mesh.normalMapURL || null,
-        geometry: mesh.geometry,
-        material: mesh.material,
-        normals: mesh.normals || NormalsData,
-      })
-    );
-
-    await Promise.all(meshPromises); // Load all textures in parallel
   }
 }

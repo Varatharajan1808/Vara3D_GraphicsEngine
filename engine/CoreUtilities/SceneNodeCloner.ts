@@ -138,7 +138,7 @@ export function cloneSceneNode(source: SceneNode): SceneNode {
 }
 
 /** True if `node` is under `ancestor` in the hierarchy. */
-export function isDescendantOf(node: SceneNode, ancestor: SceneNode): boolean {
+function isDescendantOf(node: SceneNode, ancestor: SceneNode): boolean {
   let cur: SceneNode | null = node.parent;
   while (cur) {
     if (cur === ancestor) return true;

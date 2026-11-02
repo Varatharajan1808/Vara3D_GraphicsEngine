@@ -86,12 +86,6 @@ export class ObjectClipboardController {
     window.addEventListener("keydown", this.keyHandler);
   }
 
-  unbindKeyboard(): void {
-    if (!this.keyHandler) return;
-    window.removeEventListener("keydown", this.keyHandler);
-    this.keyHandler = null;
-  }
-
   copy(): boolean {
     const targets = this.getSelectedCloneTargets();
     if (targets.length === 0) return false;

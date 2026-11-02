@@ -133,21 +133,7 @@ export class EditorUIController {
             });
         });
 
-        // File menu items
-        document.getElementById('new-scene-btn')?.addEventListener('click', () => {
-            console.log('New Scene clicked');
-            // TODO: Implement new scene
-        });
-
-        document.getElementById('import-gltf-btn')?.addEventListener('click', () => {
-            console.log('Import GLTF clicked');
-            // TODO: Implement GLTF import
-        });
-
-        document.getElementById('export-gltf-btn')?.addEventListener('click', () => {
-            console.log('Export GLTF clicked');
-            // TODO: Implement GLTF export
-        });
+        // File menu (new/import/export) is wired in EditorApplication
 
         // Transform inputs
         this.setupTransformInputs();

@@ -1,5 +1,5 @@
 import { PBRMaterialProperties } from "../MaterialSystem/PBRMaterialProperties";
-import { mat4, vec3, vec4 } from "../MathLibrary/gl-matrix";
+import { mat4 } from "../MathLibrary/gl-matrix";
 import { RenderableMeshObject } from "../MeshRenderer/RenderableMeshObject";
 
 // Types for axis directions
@@ -1094,49 +1094,6 @@ export class TransformGizmoController {
       axis: axis,
     };
   }
-  updateMeshBoundingBox(mesh: RenderableMeshObject): void {
-    if (!mesh.geometry || !mesh.geometry.Vertices || !mesh.visible) {
-      mesh.boundingBox = undefined;
-      return;
-    }
-
-    const vertices = mesh.geometry.Vertices;
-    const min = [Infinity, Infinity, Infinity];
-    const max = [-Infinity, -Infinity, -Infinity];
-
-    const tempVec = vec4.fromValues(0, 0, 0, 1);
-
-    for (let i = 0; i < vertices.length; i += 3) {
-      tempVec[0] = vertices[i];
-      tempVec[1] = vertices[i + 1];
-      tempVec[2] = vertices[i + 2];
-      tempVec[3] = 1;
-
-      vec4.transformMat4(tempVec, tempVec, mesh.localMatrix);
-
-      const worldX = tempVec[0];
-      const worldY = tempVec[1];
-      const worldZ = tempVec[2];
-
-      min[0] = Math.min(min[0], worldX);
-      min[1] = Math.min(min[1], worldY);
-      min[2] = Math.min(min[2], worldZ);
-
-      max[0] = Math.max(max[0], worldX);
-      max[1] = Math.max(max[1], worldY);
-      max[2] = Math.max(max[2], worldZ);
-    }
-
-    const basePadding = 0.02;
-    const padding = mesh.geometry.type.includes("ArrowHead")
-      ? basePadding * 2
-      : basePadding;
-
-    mesh.boundingBox = {
-      min: [min[0] - padding, min[1] - padding, min[2] - padding],
-      max: [max[0] + padding, max[1] + padding, max[2] + padding],
-    };
-  }
   updateLocalMatrix(): void {
     mat4.identity(this.localMatrix);
     mat4.translate(
@@ -1187,71 +1144,6 @@ export class TransformGizmoController {
       max: [max[0] + padding, max[1] + padding, max[2] + padding],
     };
   }
-  calculateRayDirection(camera: any, mouseX: number, mouseY: number): any {
-    const ndc = [
-      (mouseX / this.canvas.width) * 2 - 1,
-      -(mouseY / this.canvas.height) * 2 + 1,
-      -1,
-      1,
-    ];
-    const clip = vec4.fromValues(ndc[0], ndc[1], -1, 1);
-    const invProj = mat4.create();
-    if (!mat4.invert(invProj, camera.projectionMatrix)) {
-      throw new Error("Failed to invert projection matrix");
-    }
-    const eye = vec4.create();
-    vec4.transformMat4(eye, clip, invProj);
-    eye[3] = 0;
-    const invView = mat4.create();
-    if (!mat4.invert(invView, camera.viewMatrix)) {
-      throw new Error("Failed to invert view matrix");
-    }
-    const rayWorld = vec4.create();
-    vec4.transformMat4(rayWorld, eye, invView);
-    return vec3.normalize(vec3.create(), rayWorld as any);
-  }
-  intersectRayWithBoundingBox(
-    rayOrigin: number[],
-    rayDirection: number[],
-    boxMin: number[],
-    boxMax: number[]
-  ): number | null {
-    const epsilon = 1e-8;
-    let tmin = -Infinity;
-    let tmax = Infinity;
-
-    for (let i = 0; i < 3; i++) {
-      const origin = rayOrigin[i];
-      const dir = rayDirection[i];
-      const min = boxMin[i];
-      const max = boxMax[i];
-
-      if (Math.abs(dir) < epsilon) {
-        if (origin < min || origin > max) return null;
-        continue;
-      }
-
-      const t1 = (min - origin) / dir;
-      const t2 = (max - origin) / dir;
-
-      const tNear = Math.min(t1, t2);
-      const tFar = Math.max(t1, t2);
-
-      tmin = Math.max(tmin, tNear);
-      tmax = Math.min(tmax, tFar);
-
-      if (tmin > tmax) return null;
-    }
-
-    if (tmin >= 0) {
-      return tmin;
-    } else if (tmax >= 0) {
-      return tmax;
-    } else {
-      return null;
-    }
-  }
-
   private generateFilledArray(count: number, value: number[]): number[] {
     const result: number[] = [];
     for (let i = 0; i < count; i++) {

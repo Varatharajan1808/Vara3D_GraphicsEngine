@@ -30,16 +30,6 @@ import {
 import { TransformGizmoController } from "../../CoreUtilities/TransformGizmoController";
 import { PBRMaterialProperties } from "../../MaterialSystem/PBRMaterialProperties";
 
-interface SceneObject {
-  boundingBox?: {
-    min: number[];
-    max: number[];
-  };
-}
-interface Mesh {
-  highlightedFace?: number[]; // Indices of the highlighted face vertices
-  highlightColor?: [number, number, number]; // Optional custom highlight color
-}
 export class WebGLRenderEngine {
   canvas: HTMLCanvasElement;
   gl: WebGLRenderingContext;
@@ -230,10 +220,11 @@ export class WebGLRenderEngine {
 
     const MAX_LIGHTS = 10;
 
-    // Categorize lights
-    const pointLights = lights.filter(l => l instanceof PointLightNode) as PointLightNode[];
-    const spotLights = lights.filter(l => l instanceof SpotLightNode) as SpotLightNode[];
-    const directionalLights = lights.filter(l => l instanceof DirectionalLightNode) as DirectionalLightNode[];
+    // Categorize lights (skip scene-graph hidden lights)
+    const isLit = (l: LightNode) => (l as any).visible !== false;
+    const pointLights = lights.filter(l => l instanceof PointLightNode && isLit(l)) as PointLightNode[];
+    const spotLights = lights.filter(l => l instanceof SpotLightNode && isLit(l)) as SpotLightNode[];
+    const directionalLights = lights.filter(l => l instanceof DirectionalLightNode && isLit(l)) as DirectionalLightNode[];
 
     // Point lights
     for (let i = 0; i < MAX_LIGHTS; i++) {
