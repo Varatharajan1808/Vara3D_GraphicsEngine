@@ -281,9 +281,8 @@ export class GLTFAssetLoader {
     mimeType: string
   ): Promise<WebGLTexture | null> {
     const blob = new Blob([new Uint8Array(bufferData)], { type: mimeType });
-    const url = URL.createObjectURL(blob);
-    const textureData = await this.loadTexture.loadTextureAsync(url);
-    URL.revokeObjectURL(url);
+    const dataUrl = await TextureAssetLoader.blobToDataURL(blob);
+    const textureData = await this.loadTexture.loadTextureAsync(dataUrl);
     return textureData.texture;
   }
 
@@ -318,9 +317,22 @@ export class GLTFAssetLoader {
             }
           }
 
-          const textureData = await this.loadTexture.loadTextureAsync(loadUrl);
+          // Persist original compressed bytes as data URL (no canvas re-encode)
+          let persistUrl = uri.startsWith("data:") ? uri : uri;
+          if (!uri.startsWith("data:") && fileMap) {
+            const fileName = uri.split("/").pop() || uri;
+            const file = fileMap.get(fileName) || fileMap.get(uri);
+            if (file) {
+              persistUrl = await TextureAssetLoader.blobToDataURL(file);
+            }
+          }
+
+          const gpuUrl = persistUrl.startsWith("data:") ? persistUrl : loadUrl;
+          const textureData = await this.loadTexture.loadTextureAsync(gpuUrl);
           textures[i] = textureData.texture;
-          textureURIs[i] = textureData.base64Image || uri;
+          textureURIs[i] = persistUrl.startsWith("data:")
+            ? persistUrl
+            : (textureData.base64Image || uri);
 
           if (isBlob) {
             URL.revokeObjectURL(loadUrl);
@@ -338,13 +350,11 @@ export class GLTFAssetLoader {
           );
           const mimeType = image.mimeType || "image/png";
           const blob = new Blob([imageBuffer], { type: mimeType });
-          const blobUrl = URL.createObjectURL(blob);
-
-          const textureData = await this.loadTexture.loadTextureAsync(blobUrl);
+          // Keep compressed image bytes — much cheaper than canvas.toDataURL after decode
+          const dataUrl = await TextureAssetLoader.blobToDataURL(blob);
+          const textureData = await this.loadTexture.loadTextureAsync(dataUrl);
           textures[i] = textureData.texture;
-          textureURIs[i] = textureData.base64Image || null;
-
-          URL.revokeObjectURL(blobUrl);
+          textureURIs[i] = dataUrl;
         }
       } catch (error) {
         console.warn(`Texture load failed for image[${i}]:`, error);

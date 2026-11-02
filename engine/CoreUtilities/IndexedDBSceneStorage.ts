@@ -204,7 +204,13 @@ export class IndexedDBSceneStorage {
           if (!texUrl && typeof mesh.image === "string") {
             texUrl = mesh.image;
           } else if (!texUrl && mesh.image instanceof HTMLImageElement) {
-            texUrl = this.imageToDataURL(mesh.image);
+            // Prefer existing src (often data:) over expensive canvas re-encode
+            texUrl = mesh.image.src?.startsWith("data:") || mesh.image.src?.startsWith("blob:")
+              ? mesh.image.src
+              : this.imageToDataURL(mesh.image);
+            if (texUrl?.startsWith("blob:")) {
+              texUrl = this.imageToDataURL(mesh.image);
+            }
           }
           serializedNode.textureDataUrl = texUrl;
 
@@ -212,7 +218,10 @@ export class IndexedDBSceneStorage {
           if (!normUrl && typeof mesh.normalMapImage === "string") {
             normUrl = mesh.normalMapImage;
           } else if (!normUrl && mesh.normalMapImage instanceof HTMLImageElement) {
-            normUrl = this.imageToDataURL(mesh.normalMapImage);
+            const src = mesh.normalMapImage.src;
+            normUrl = src?.startsWith("data:")
+              ? src
+              : this.imageToDataURL(mesh.normalMapImage);
           }
           serializedNode.normalMapDataUrl = normUrl;
         } else if (nodeKind === "light") {
@@ -357,14 +366,21 @@ export class IndexedDBSceneStorage {
 
     const createdNodeMap = new Map<string, SceneNode>();
     const textureLoader = new TextureAssetLoader(gl, scene);
-    const texturePromises: Promise<any>[] = [];
 
-    // 2. First Pass: Create instances
+    // 2. First Pass: Create instances (textures load in background — do not block first frame)
     for (const nodeData of savedData.nodes) {
       if (nodeData.nodeKind === "mesh" && nodeData.geometry) {
+        const indexSrc = nodeData.geometry.indices || [];
+        let maxIndex = 0;
+        for (let i = 0; i < indexSrc.length; i++) {
+          if (indexSrc[i] > maxIndex) maxIndex = indexSrc[i];
+        }
+        const Indices =
+          maxIndex > 65535 ? new Uint32Array(indexSrc) : new Uint16Array(indexSrc);
+
         const geomData = {
           Vertices: new Float32Array(nodeData.geometry.vertices),
-          Indices: new Uint16Array(nodeData.geometry.indices),
+          Indices,
           Normals: nodeData.geometry.normals ? new Float32Array(nodeData.geometry.normals) : undefined,
           TextureCoordinates: nodeData.geometry.texCoords ? new Float32Array(nodeData.geometry.texCoords) : undefined,
           Tangents: nodeData.geometry.tangents ? new Float32Array(nodeData.geometry.tangents) : undefined,
@@ -405,23 +421,21 @@ export class IndexedDBSceneStorage {
         if (mesh.updateBoundingBox) mesh.updateBoundingBox();
         mesh.geometryNeedsUpdate = true;
 
-        // Restore textures asynchronously and wait for them to finish
+        // Kick off textures without awaiting — viewport can show untextured meshes first
         if (nodeData.textureDataUrl) {
           let texUrl = nodeData.textureDataUrl;
           if (texUrl.startsWith("../../engine/Textures/")) {
             texUrl = texUrl.replace("../../", "");
           }
           (mesh as any).textureURL = texUrl;
-          texturePromises.push(
-            textureLoader
-              .loadTextureAsync(texUrl)
-              .then((texData) => {
-                mesh.texture = texData.texture;
-                mesh.image = (texData.base64Image || texUrl) as any;
-                mesh.geometryNeedsUpdate = true;
-              })
-              .catch((err) => console.warn("[IndexedDBSceneStorage] Texture load error:", err))
-          );
+          mesh.image = texUrl as any;
+          textureLoader
+            .loadTextureAsync(texUrl)
+            .then((texData) => {
+              mesh.texture = texData.texture;
+              mesh.image = (texData.base64Image || texUrl) as any;
+            })
+            .catch((err) => console.warn("[IndexedDBSceneStorage] Texture load error:", err));
         }
 
         if (nodeData.normalMapDataUrl) {
@@ -430,16 +444,14 @@ export class IndexedDBSceneStorage {
             normUrl = normUrl.replace("../../", "");
           }
           (mesh as any).normalMapURL = normUrl;
-          texturePromises.push(
-            textureLoader
-              .loadTextureAsync(normUrl)
-              .then((normData) => {
-                mesh.normalMap = normData.texture;
-                mesh.normalMapImage = (normData.base64Image || normUrl) as any;
-                mesh.geometryNeedsUpdate = true;
-              })
-              .catch((err) => console.warn("[IndexedDBSceneStorage] NormalMap load error:", err))
-          );
+          mesh.normalMapImage = normUrl as any;
+          textureLoader
+            .loadTextureAsync(normUrl)
+            .then((normData) => {
+              mesh.normalMap = normData.texture;
+              mesh.normalMapImage = (normData.base64Image || normUrl) as any;
+            })
+            .catch((err) => console.warn("[IndexedDBSceneStorage] NormalMap load error:", err));
         }
 
         scene.add(mesh);
@@ -498,12 +510,7 @@ export class IndexedDBSceneStorage {
       }
     }
 
-    // 4. Await all texture loading promises before finishing restore
-    if (texturePromises.length > 0) {
-      await Promise.all(texturePromises);
-    }
-
-    // 5. Restore Camera if available
+    // 4. Restore Camera if available (textures continue loading in background)
     if (camera && savedData.camera && savedData.camera.eye) {
       camera.eye = { ...savedData.camera.eye };
       if (savedData.camera.center && camera.center) {

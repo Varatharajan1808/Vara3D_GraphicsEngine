@@ -88,14 +88,142 @@ body {
     grid-area: rightpanel;
     background-color: var(--bg-secondary);
     border-left: 1px solid var(--border-color);
+    min-height: 0;
     overflow-y: auto;
     overflow-x: hidden;
+    overscroll-behavior: contain;
+    transition: width var(--transition-fast), transform var(--transition-normal), box-shadow var(--transition-normal);
 }
 
 #status-bar {
     grid-area: statusbar;
     background-color: var(--bg-secondary);
     border-top: 1px solid var(--border-color);
+}
+
+/* Desktop: collapse inspector into the grid */
+#app-container.inspector-collapsed {
+    grid-template-columns: var(--toolbar-width) 1fr 0px;
+}
+
+#app-container.inspector-collapsed #right-panel {
+    overflow: hidden;
+    border-left: none;
+    pointer-events: none;
+}
+
+.inspector-toggle-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 28px;
+    height: 28px;
+    padding: 0;
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-sm);
+    background: var(--bg-tertiary);
+    color: var(--text-primary);
+    cursor: pointer;
+    transition: background-color var(--transition-fast), border-color var(--transition-fast), color var(--transition-fast);
+}
+
+.inspector-toggle-btn:hover {
+    background: var(--bg-hover);
+    border-color: var(--border-light);
+}
+
+.inspector-toggle-btn[aria-pressed="true"] {
+    background: var(--accent-primary);
+    border-color: var(--accent-primary);
+    color: var(--text-white);
+}
+
+#theme-toggle-btn .theme-icon-moon {
+    display: none;
+}
+
+[data-theme="light"] #theme-toggle-btn .theme-icon-sun {
+    display: none;
+}
+
+[data-theme="light"] #theme-toggle-btn .theme-icon-moon {
+    display: block;
+}
+
+.inspector-backdrop {
+    display: none;
+}
+
+/* Narrow layouts: inspector becomes an overlay drawer */
+@media (max-width: 1100px) {
+    #app-container {
+        grid-template-areas:
+            "topbar topbar"
+            "toolbar viewport"
+            "statusbar statusbar";
+        grid-template-columns: var(--toolbar-width) 1fr;
+    }
+
+    #app-container.inspector-collapsed {
+        grid-template-columns: var(--toolbar-width) 1fr;
+    }
+
+    #right-panel {
+        position: fixed;
+        top: var(--topbar-height);
+        right: 0;
+        bottom: var(--statusbar-height);
+        width: min(var(--rightpanel-width), 92vw);
+        z-index: 80;
+        transform: translateX(100%);
+        pointer-events: none;
+        box-shadow: none;
+        border-left: 1px solid var(--border-color);
+    }
+
+    #app-container.inspector-open #right-panel {
+        transform: translateX(0);
+        pointer-events: auto;
+        box-shadow: -8px 0 24px rgba(0, 0, 0, 0.45);
+    }
+
+    #app-container.inspector-collapsed #right-panel {
+        transform: translateX(100%);
+        pointer-events: none;
+        overflow: hidden;
+    }
+
+    .inspector-backdrop {
+        display: block;
+        position: fixed;
+        inset: var(--topbar-height) 0 var(--statusbar-height) 0;
+        background: rgba(0, 0, 0, 0.45);
+        z-index: 70;
+        opacity: 0;
+        pointer-events: none;
+        transition: opacity var(--transition-normal);
+    }
+
+    .inspector-backdrop.is-visible {
+        opacity: 1;
+        pointer-events: auto;
+    }
+}
+
+@media (max-width: 720px) {
+    :root {
+        --toolbar-width: 44px;
+        --rightpanel-width: 300px;
+    }
+
+    #top-menu-bar .menu-btn {
+        padding: 8px 8px;
+        font-size: 12px;
+    }
+
+    .topbar-trailing > span {
+        display: none;
+    }
 }
 
 /* Canvas */

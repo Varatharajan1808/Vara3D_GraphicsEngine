@@ -40,12 +40,16 @@ export class EditorUIController {
     private selectedObjectUUID: string | null = null;
     private selectedObjectUUIDs: Set<string> = new Set();
     private collapsedNodes: Set<string> = new Set();
+    private sceneTreeDropBound = false;
+    private sceneTreeKeyBound = false;
 
     constructor() {
         this.initializeElements();
         this.setupEventListeners();
         this.initializePanels();
         this.populateTextureLibraries();
+        this.bindSceneGraphRootDrop();
+        this.bindSceneGraphKeyboard();
     }
 
     private initializeElements(): void {
@@ -81,19 +85,24 @@ export class EditorUIController {
 
         // Close dropdowns when clicking outside
         document.addEventListener('click', (e) => {
-            if (!this.isDescendant(this.fileMenuBtn, e.target as Node)) {
-                this.fileMenu.classList.remove('show');
+            const target = e.target as Node;
+            this.closeMenuIfOutside(this.fileMenuBtn, this.fileMenu, target);
+            this.closeMenuIfOutside(this.addMenuBtn, this.addMenu, target);
+            if (this.viewMenuBtn && this.viewMenu) {
+                this.closeMenuIfOutside(this.viewMenuBtn, this.viewMenu, target);
             }
-            if (!this.isDescendant(this.addMenuBtn, e.target as Node)) {
-                this.addMenu.classList.remove('show');
-            }
-            if (this.viewMenuBtn && !this.isDescendant(this.viewMenuBtn, e.target as Node)) {
-                this.viewMenu?.classList.remove('show');
-            }
-            if (this.helpMenuBtn && !this.isDescendant(this.helpMenuBtn, e.target as Node)) {
-                this.helpMenu?.classList.remove('show');
+            if (this.helpMenuBtn && this.helpMenu) {
+                this.closeMenuIfOutside(this.helpMenuBtn, this.helpMenu, target);
             }
         });
+
+        document.getElementById('shortcuts-help-btn')?.addEventListener('click', (e) => {
+            e.stopPropagation();
+            this.showShortcutsHelp();
+        });
+
+        this.setupInspectorToggle();
+        this.setupThemeToggle();
 
         // Toolbar tool selection
         this.translateTool.addEventListener('click', () => this.setActiveTool('translate'));
@@ -126,7 +135,7 @@ export class EditorUIController {
                 const light = (item as HTMLElement).dataset.light;
                 const camera = (item as HTMLElement).dataset.camera;
 
-                if (type && (geometry || light || camera)) {
+                if (type && (geometry || light || camera || type === 'group')) {
                     const subtype = geometry || light || camera || '';
                     this.handleAddObject(type, subtype);
                 }
@@ -151,17 +160,117 @@ export class EditorUIController {
         this.setupGridInputs();
     }
 
+    private getMenuItems(menu: HTMLElement): HTMLElement[] {
+        return Array.from(
+            menu.querySelectorAll<HTMLElement>('.dropdown-item:not(.disabled):not([disabled])')
+        );
+    }
+
+    private setMenuOpen(button: HTMLElement, menu: HTMLElement, open: boolean, focusFirst = true): void {
+        menu.classList.toggle('show', open);
+        button.setAttribute('aria-expanded', open ? 'true' : 'false');
+        if (!open) return;
+
+        document.querySelectorAll('.dropdown-menu').forEach((m) => {
+            if (m !== menu) {
+                m.classList.remove('show');
+            }
+        });
+        document.querySelectorAll<HTMLElement>('[aria-haspopup="menu"]').forEach((btn) => {
+            if (btn !== button) {
+                btn.setAttribute('aria-expanded', 'false');
+            }
+        });
+
+        if (focusFirst) {
+            const first = this.getMenuItems(menu)[0];
+            first?.focus();
+        }
+    }
+
+    private closeMenuIfOutside(button: HTMLElement, menu: HTMLElement, target: Node): void {
+        if (this.isDescendant(button, target) || this.isDescendant(menu, target)) {
+            return;
+        }
+        menu.classList.remove('show');
+        button.setAttribute('aria-expanded', 'false');
+    }
+
     private setupDropdown(button: HTMLElement, menu: HTMLElement): void {
+        button.setAttribute('aria-haspopup', 'menu');
+        button.setAttribute('aria-expanded', menu.classList.contains('show') ? 'true' : 'false');
+        if (!menu.getAttribute('role')) {
+            menu.setAttribute('role', 'menu');
+        }
+
+        this.getMenuItems(menu).forEach((item) => {
+            item.setAttribute('role', 'menuitem');
+            item.tabIndex = -1;
+        });
+
         button.addEventListener('click', (e) => {
             e.stopPropagation();
-            menu.classList.toggle('show');
+            const willOpen = !menu.classList.contains('show');
+            this.setMenuOpen(button, menu, willOpen, willOpen);
+        });
 
-            // Close other dropdowns
-            document.querySelectorAll('.dropdown-menu').forEach((m) => {
-                if (m !== menu) {
-                    m.classList.remove('show');
-                }
-            });
+        button.addEventListener('keydown', (e) => {
+            if (e.key === 'ArrowDown') {
+                e.preventDefault();
+                this.setMenuOpen(button, menu, true, true);
+            }
+        });
+
+        menu.addEventListener('keydown', (e) => {
+            const items = this.getMenuItems(menu);
+            if (items.length === 0) return;
+
+            const currentIndex = items.indexOf(document.activeElement as HTMLElement);
+
+            if (e.key === 'Escape') {
+                e.preventDefault();
+                e.stopPropagation();
+                this.setMenuOpen(button, menu, false, false);
+                button.focus();
+                return;
+            }
+
+            if (e.key === 'ArrowDown') {
+                e.preventDefault();
+                const next = items[(currentIndex + 1 + items.length) % items.length];
+                next?.focus();
+                return;
+            }
+
+            if (e.key === 'ArrowUp') {
+                e.preventDefault();
+                const prev = items[(currentIndex - 1 + items.length) % items.length];
+                prev?.focus();
+                return;
+            }
+
+            if (e.key === 'Home') {
+                e.preventDefault();
+                items[0]?.focus();
+                return;
+            }
+
+            if (e.key === 'End') {
+                e.preventDefault();
+                items[items.length - 1]?.focus();
+                return;
+            }
+
+            if (e.key === 'Tab') {
+                this.setMenuOpen(button, menu, false, false);
+            }
+        });
+
+        menu.addEventListener('click', (e) => {
+            const item = (e.target as HTMLElement).closest('.dropdown-item');
+            if (!item || item.classList.contains('disabled')) return;
+            this.setMenuOpen(button, menu, false, false);
+            button.focus();
         });
     }
 
@@ -201,11 +310,179 @@ export class EditorUIController {
         }
     }
 
+    private setupThemeToggle(): void {
+        const btn = document.getElementById('theme-toggle-btn');
+        if (!btn) return;
+
+        const storageKey = 'vara3d.theme';
+
+        const getTheme = (): 'light' | 'dark' => {
+            const attr = document.documentElement.getAttribute('data-theme');
+            return attr === 'light' ? 'light' : 'dark';
+        };
+
+        const apply = (theme: 'light' | 'dark') => {
+            document.documentElement.setAttribute('data-theme', theme);
+            const isLight = theme === 'light';
+            btn.title = isLight ? 'Switch to dark theme' : 'Switch to light theme';
+            btn.setAttribute('aria-label', btn.title);
+            try {
+                localStorage.setItem(storageKey, theme);
+            } catch {
+                /* ignore */
+            }
+        };
+
+        let theme: 'light' | 'dark' = 'dark';
+        try {
+            const saved = localStorage.getItem(storageKey);
+            if (saved === 'light' || saved === 'dark') {
+                theme = saved;
+            }
+        } catch {
+            theme = getTheme();
+        }
+        apply(theme);
+
+        btn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            apply(getTheme() === 'light' ? 'dark' : 'light');
+        });
+    }
+
+    private setupInspectorToggle(): void {
+        const app = document.getElementById('app-container');
+        const btn = document.getElementById('inspector-toggle-btn');
+        const backdrop = document.getElementById('inspector-backdrop');
+        if (!app || !btn) return;
+
+        const storageKey = 'vara3d.inspectorOpen';
+        const mq = window.matchMedia('(max-width: 1100px)');
+
+        const isOverlayMode = () => mq.matches;
+
+        const apply = (open: boolean) => {
+            app.classList.toggle('inspector-open', open);
+            app.classList.toggle('inspector-collapsed', !open);
+            btn.setAttribute('aria-pressed', open ? 'true' : 'false');
+            btn.title = open ? 'Hide Inspector (I)' : 'Show Inspector (I)';
+            if (backdrop) {
+                backdrop.hidden = !(isOverlayMode() && open);
+                backdrop.classList.toggle('is-visible', isOverlayMode() && open);
+            }
+            try {
+                localStorage.setItem(storageKey, open ? '1' : '0');
+            } catch {
+                /* ignore */
+            }
+            // Let the WebGL canvas pick up the new layout size
+            window.dispatchEvent(new Event('resize'));
+        };
+
+        let open = true;
+        try {
+            const saved = localStorage.getItem(storageKey);
+            if (saved === '0' || saved === '1') {
+                open = saved === '1';
+            } else if (isOverlayMode()) {
+                open = false;
+            }
+        } catch {
+            open = !isOverlayMode();
+        }
+
+        apply(open);
+
+        btn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            open = !app.classList.contains('inspector-open');
+            apply(open);
+        });
+
+        backdrop?.addEventListener('click', () => {
+            open = false;
+            apply(false);
+        });
+
+        document.addEventListener('keydown', (e) => {
+            if (
+                e.target instanceof HTMLInputElement ||
+                e.target instanceof HTMLTextAreaElement ||
+                (e.target as HTMLElement)?.isContentEditable
+            ) {
+                return;
+            }
+            if (e.key.toLowerCase() === 'i' && !e.ctrlKey && !e.metaKey && !e.altKey) {
+                e.preventDefault();
+                open = !app.classList.contains('inspector-open');
+                apply(open);
+                return;
+            }
+            if (e.key === 'Escape' && isOverlayMode() && app.classList.contains('inspector-open')) {
+                open = false;
+                apply(false);
+            }
+        });
+
+        const onMq = () => {
+            // Entering overlay mode: keep current preference but sync backdrop
+            apply(app.classList.contains('inspector-open'));
+        };
+        if (typeof mq.addEventListener === 'function') {
+            mq.addEventListener('change', onMq);
+        } else {
+            // Safari < 14
+            (mq as any).addListener?.(onMq);
+        }
+
+        // Shortcuts help modal list mention
+        // (I) is documented via button title
+    }
+
     private initializePanels(): void {
         this.panels.forEach((panel) => {
-            const header = panel.querySelector('.panel-header');
-            header?.addEventListener('click', () => {
+            const header = panel.querySelector('.panel-header') as HTMLElement | null;
+            if (!header) return;
+
+            const title =
+                (panel as HTMLElement).id ||
+                header.querySelector('.panel-title')?.textContent?.trim() ||
+                'panel';
+            const storageKey = `vara3d.panelCollapsed.${title}`;
+
+            try {
+                if (localStorage.getItem(storageKey) === '1') {
+                    panel.classList.add('collapsed');
+                }
+            } catch {
+                /* private mode / blocked storage */
+            }
+
+            header.setAttribute('role', 'button');
+            header.setAttribute('tabindex', '0');
+            header.setAttribute(
+                'aria-expanded',
+                panel.classList.contains('collapsed') ? 'false' : 'true'
+            );
+            header.title = 'Click to expand / collapse';
+
+            const toggle = () => {
                 panel.classList.toggle('collapsed');
+                const collapsed = panel.classList.contains('collapsed');
+                header.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
+                try {
+                    localStorage.setItem(storageKey, collapsed ? '1' : '0');
+                } catch {
+                    /* ignore */
+                }
+            };
+
+            header.addEventListener('click', toggle);
+            header.addEventListener('keydown', (e) => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault();
+                    toggle();
+                }
             });
         });
     }
@@ -369,8 +646,16 @@ export class EditorUIController {
             }
         };
 
+        const syncGridAria = () => {
+            if (!visibleToggle) return;
+            const on = visibleToggle.classList.contains('active');
+            visibleToggle.setAttribute('aria-checked', on ? 'true' : 'false');
+        };
+        syncGridAria();
+
         visibleToggle?.addEventListener('click', () => {
             visibleToggle.classList.toggle('active');
+            syncGridAria();
             handleGridChange();
         });
     }
@@ -572,6 +857,79 @@ export class EditorUIController {
         document.getElementById('modal-confirm-btn')?.focus();
     }
 
+    /**
+     * Non-blocking status toast (bottom-right). Auto-dismisses.
+     * Use for success / light info; keep showAlert for blocking errors.
+     */
+    public showToast(
+        message: string,
+        options?: { type?: "success" | "info" | "error"; durationMs?: number }
+    ): void {
+        const type = options?.type ?? "success";
+        const durationMs = options?.durationMs ?? 2800;
+
+        let host = document.getElementById("app-toast-host");
+        if (!host) {
+            host = document.createElement("div");
+            host.id = "app-toast-host";
+            host.className = "toast-host";
+            host.setAttribute("aria-live", "polite");
+            document.body.appendChild(host);
+        }
+
+        const toast = document.createElement("div");
+        toast.className = `toast toast-${type}`;
+        toast.textContent = message;
+        host.appendChild(toast);
+
+        requestAnimationFrame(() => toast.classList.add("show"));
+
+        window.setTimeout(() => {
+            toast.classList.remove("show");
+            toast.classList.add("hide");
+            window.setTimeout(() => toast.remove(), 220);
+        }, durationMs);
+    }
+
+    public showShortcutsHelp(): void {
+        const row = (label: string, keys: string) =>
+            `<div class="shortcuts-help-row"><span>${label}</span><kbd>${keys}</kbd></div>`;
+
+        const body = `
+            <div class="shortcuts-help-list">
+                <div class="shortcuts-help-group-title">General</div>
+                ${row('Undo', 'Ctrl+Z')}
+                ${row('Redo', 'Ctrl+Y / Ctrl+Shift+Z')}
+                ${row('Copy', 'Ctrl+C')}
+                ${row('Paste', 'Ctrl+V')}
+                ${row('Duplicate', 'Ctrl+D')}
+                ${row('Delete', 'Del / Backspace')}
+                ${row('Deselect', 'Esc')}
+                ${row('Toggle theme', 'Top-bar sun/moon')}
+                <div class="shortcuts-help-group-title">Menus</div>
+                ${row('Open File menu', 'Shift+F')}
+                ${row('Open Add menu', 'Shift+A')}
+                ${row('Menu navigate', '↑ / ↓ · Esc closes')}
+                ${row('Scene graph', '↑ / ↓ · ← / → fold')}
+                <div class="shortcuts-help-group-title">Tools</div>
+                ${row('Translate', 'T')}
+                ${row('Rotate', 'R')}
+                ${row('Scale', 'S')}
+                ${row('Object mode', 'O')}
+                ${row('Edit mode', 'E')}
+                ${row('Vertex / Edge / Face', '1 / 2 / 3')}
+                <div class="shortcuts-help-group-title">Viewport</div>
+                ${row('Focus selection', 'F')}
+                ${row('Toggle inspector', 'I')}
+                ${row('Orbit', 'LMB drag (empty)')}
+                ${row('Pan', 'MMB / right-drag')}
+                ${row('Zoom', 'Scroll')}
+            </div>
+        `;
+
+        this.showAlert('Keyboard Shortcuts', body);
+    }
+
     public showAlert(title: string, message?: string): void {
         const modalTitle = message !== undefined ? title : "Notice";
         const modalMessage = message !== undefined ? message : title;
@@ -633,6 +991,7 @@ export class EditorUIController {
         if (!object) {
             this.selectedObjectUUID = null;
             this.selectedObjectUUIDs.clear();
+            this.setInspectorEmpty(true);
             return;
         }
         // Update selected UUID
@@ -642,6 +1001,7 @@ export class EditorUIController {
         }
 
         // Show/hide panels based on object type
+        this.setInspectorEmpty(false);
         this.updatePanelVisibility(object.type);
 
         // Update type and UUID
@@ -671,6 +1031,25 @@ export class EditorUIController {
         }
     }
 
+    /** Show empty-selection message; hide property panels when nothing is selected. */
+    public setInspectorEmpty(isEmpty: boolean): void {
+        const emptyState = document.getElementById('selection-empty-state');
+        const objectPanel = document.getElementById('object-properties-panel');
+        if (emptyState) emptyState.style.display = isEmpty ? 'block' : 'none';
+        if (objectPanel) objectPanel.style.display = isEmpty ? 'none' : 'block';
+
+        if (isEmpty) {
+            const materialPanel = document.getElementById('material-properties-panel');
+            const lightPanel = document.getElementById('light-properties-panel');
+            const texturePanel = document.getElementById('texture-properties-panel');
+            const cameraPanel = document.getElementById('camera-properties-panel');
+            if (materialPanel) materialPanel.style.display = 'none';
+            if (lightPanel) lightPanel.style.display = 'none';
+            if (texturePanel) texturePanel.style.display = 'none';
+            if (cameraPanel) cameraPanel.style.display = 'none';
+        }
+    }
+
     private updatePanelVisibility(objectType: string): void {
         const materialPanel = document.getElementById('material-properties-panel');
         const lightPanel = document.getElementById('light-properties-panel');
@@ -679,7 +1058,7 @@ export class EditorUIController {
 
         // Show/hide based on object type
         const isLight = objectType?.includes('Light') || objectType === 'PointLight' || objectType === 'SpotLight' || objectType === 'DirectionalLight';
-        const isMesh = objectType === 'Mesh';
+        const isMesh = objectType === 'Mesh' || objectType?.includes('Geometry') || objectType === 'RenderableMeshObject';
         const isCamera = objectType === 'Camera';
 
         if (materialPanel) {
@@ -708,35 +1087,165 @@ export class EditorUIController {
         if (trianglesElement) trianglesElement.textContent = stats.triangles.toLocaleString();
     }
 
+    private getVisibleTreeItems(): HTMLElement[] {
+        return Array.from(document.querySelectorAll<HTMLElement>('#scene-tree .tree-item')).filter(
+            (el) => el.offsetParent !== null
+        );
+    }
+
+    /**
+     * True if `targetLi` is nested under the tree item with `ancestorUuid`
+     * (i.e. dropping onto a descendant of the dragged node).
+     */
+    private isTreeUuidUnder(ancestorUuid: string, targetLi: HTMLElement): boolean {
+        if (!ancestorUuid) return false;
+        const ancestorLi = document.querySelector(
+            `.tree-item[data-uuid="${ancestorUuid}"]`
+        ) as HTMLElement | null;
+        if (!ancestorLi || ancestorLi === targetLi) return false;
+        const childList = ancestorLi.nextElementSibling as HTMLElement | null;
+        return !!(childList?.classList.contains('tree-item-children') && childList.contains(targetLi));
+    }
+
+    private setTreeItemCollapsed(item: HTMLElement | undefined, collapsed: boolean): void {
+        if (!item?.dataset.uuid) return;
+        const uuid = item.dataset.uuid;
+        const childrenContainer = item.nextElementSibling as HTMLElement | null;
+        if (!childrenContainer?.classList.contains('tree-item-children')) return;
+
+        if (collapsed) {
+            this.collapsedNodes.add(uuid);
+        } else {
+            this.collapsedNodes.delete(uuid);
+        }
+        childrenContainer.style.display = collapsed ? 'none' : 'block';
+        const toggle = item.querySelector('.tree-item-toggle') as HTMLElement | null;
+        if (toggle && (toggle.textContent === '+' || toggle.textContent === '−')) {
+            toggle.textContent = collapsed ? '+' : '−';
+        }
+    }
+
+    private selectTreeItemFromKeyboard(item: HTMLElement | undefined): void {
+        if (!item?.dataset.uuid) return;
+        this.selectObject(item.dataset.uuid);
+        item.scrollIntoView({ block: 'nearest' });
+    }
+
+    private bindSceneGraphKeyboard(): void {
+        if (this.sceneTreeKeyBound) return;
+        const sceneTree = document.getElementById('scene-tree');
+        if (!sceneTree) return;
+        this.sceneTreeKeyBound = true;
+
+        sceneTree.setAttribute('role', 'tree');
+        sceneTree.setAttribute('tabindex', '0');
+        sceneTree.setAttribute('aria-label', 'Scene graph');
+
+        sceneTree.addEventListener('keydown', (e) => {
+            const target = e.target as HTMLElement;
+            if (target.closest('.tree-action-btn') || target.closest('.tree-item-toggle')) {
+                return;
+            }
+
+            const items = this.getVisibleTreeItems();
+            if (items.length === 0) return;
+
+            let idx = items.findIndex((el) => el.dataset.uuid === this.selectedObjectUUID);
+            if (idx < 0) idx = 0;
+
+            switch (e.key) {
+                case 'ArrowDown':
+                    e.preventDefault();
+                    this.selectTreeItemFromKeyboard(items[Math.min(idx + 1, items.length - 1)]);
+                    break;
+                case 'ArrowUp':
+                    e.preventDefault();
+                    this.selectTreeItemFromKeyboard(items[Math.max(idx - 1, 0)]);
+                    break;
+                case 'Home':
+                    e.preventDefault();
+                    this.selectTreeItemFromKeyboard(items[0]);
+                    break;
+                case 'End':
+                    e.preventDefault();
+                    this.selectTreeItemFromKeyboard(items[items.length - 1]);
+                    break;
+                case 'ArrowRight':
+                    e.preventDefault();
+                    this.setTreeItemCollapsed(items[idx], false);
+                    break;
+                case 'ArrowLeft':
+                    e.preventDefault();
+                    this.setTreeItemCollapsed(items[idx], true);
+                    break;
+            }
+        });
+    }
+
+    private bindSceneGraphRootDrop(): void {
+        if (this.sceneTreeDropBound) return;
+        const container = document.getElementById('scene-graph-container');
+        const sceneTree = document.getElementById('scene-tree');
+        if (!container || !sceneTree) return;
+        this.sceneTreeDropBound = true;
+
+        const clearRootTarget = () => container.classList.remove('root-drop-target');
+
+        const onDragOver = (e: DragEvent) => {
+            e.preventDefault();
+            e.stopPropagation();
+            if (e.dataTransfer) e.dataTransfer.dropEffect = 'move';
+            container.classList.add('root-drop-target');
+        };
+
+        const onDragLeave = (e: DragEvent) => {
+            const related = e.relatedTarget as Node | null;
+            if (related && container.contains(related)) return;
+            clearRootTarget();
+        };
+
+        const onDrop = (e: DragEvent) => {
+            e.preventDefault();
+            e.stopPropagation();
+            clearRootTarget();
+            const draggedUuid = e.dataTransfer?.getData('text/plain');
+            // Drop on empty area / tree chrome → reparent to root
+            if (draggedUuid && this.onNodeReparentCallback) {
+                const overItem = (e.target as HTMLElement | null)?.closest?.('.tree-item');
+                if (!overItem) {
+                    this.onNodeReparentCallback(draggedUuid, null);
+                }
+            }
+        };
+
+        container.addEventListener('dragover', onDragOver);
+        container.addEventListener('dragleave', onDragLeave);
+        container.addEventListener('drop', onDrop);
+        document.addEventListener('dragend', clearRootTarget);
+    }
+
     public updateSceneGraph(sceneObjects: any[]): void {
         const sceneTree = document.getElementById('scene-tree');
+        const emptyState = document.getElementById('scene-graph-empty');
         if (!sceneTree) return;
 
         sceneTree.innerHTML = '';
 
-        // Add a drop zone for the whole tree to allow reparenting to root
-        sceneTree.addEventListener('dragover', (e) => {
-            e.preventDefault();
-            e.stopPropagation();
-        });
-
-        sceneTree.addEventListener('drop', (e) => {
-            e.preventDefault();
-            const dragEvent = e as DragEvent;
-            if (dragEvent.dataTransfer) {
-                const draggedUuid = dragEvent.dataTransfer.getData('text/plain');
-                if (draggedUuid && this.onNodeReparentCallback) {
-                    this.onNodeReparentCallback(draggedUuid, null);
-                }
-            }
-        });
-
+        let contentCount = 0;
         sceneObjects.forEach((obj) => {
             const isGizmo = obj.isGizmoPart || (obj.type && obj.type.startsWith('Gizmo-'));
             if (!isGizmo) {
                 this.createTreeItem(obj, sceneTree, 0);
+                if (obj.type !== 'Camera') contentCount++;
             }
         });
+
+        if (emptyState) {
+            // Camera always exists — treat "empty" as no meshes/lights/groups yet
+            const isEmpty = contentCount === 0;
+            emptyState.style.display = isEmpty ? 'flex' : 'none';
+            emptyState.setAttribute('aria-hidden', isEmpty ? 'false' : 'true');
+        }
     }
 
     private createTreeItem(obj: any, parentElement: HTMLElement, depth: number): void {
@@ -746,6 +1255,13 @@ export class EditorUIController {
         const li = document.createElement('li');
         li.className = 'tree-item';
         li.dataset.uuid = obj.uuid;
+        li.setAttribute('role', 'treeitem');
+        li.setAttribute(
+            'aria-selected',
+            this.selectedObjectUUIDs.has(obj.uuid) || obj.uuid === this.selectedObjectUUID
+                ? 'true'
+                : 'false'
+        );
 
         // Container for better alignment
         const content = document.createElement('div');
@@ -857,6 +1373,7 @@ export class EditorUIController {
         li.addEventListener('click', (e) => {
             e.stopPropagation();
             this.selectObject(obj.uuid);
+            document.getElementById('scene-tree')?.focus({ preventScroll: true });
         });
 
         // Drag and Drop Logic
@@ -872,22 +1389,41 @@ export class EditorUIController {
             }
         });
 
-        li.addEventListener('dragend', (e) => {
+        li.addEventListener('dragend', () => {
             li.classList.remove('dragging');
-            document.querySelectorAll('.drag-over').forEach(el => el.classList.remove('drag-over'));
+            document.querySelectorAll('.tree-item.drag-over').forEach((el) =>
+                el.classList.remove('drag-over')
+            );
+            document.getElementById('scene-graph-container')?.classList.remove('root-drop-target');
         });
 
         li.addEventListener('dragover', (e) => {
             e.preventDefault();
             e.stopPropagation();
             const dragEvent = e as DragEvent;
+            const draggedUuid = dragEvent.dataTransfer?.getData('text/plain')
+                || (document.querySelector('.tree-item.dragging') as HTMLElement | null)?.dataset.uuid
+                || '';
+
+            // Camera / self / own descendant are invalid drop targets
+            const invalid =
+                obj.type === 'Camera' ||
+                (!!draggedUuid && draggedUuid === obj.uuid) ||
+                this.isTreeUuidUnder(draggedUuid, li);
+
             if (dragEvent.dataTransfer) {
-                dragEvent.dataTransfer.dropEffect = 'move';
+                dragEvent.dataTransfer.dropEffect = invalid ? 'none' : 'move';
             }
-            li.classList.add('drag-over');
+            document.querySelectorAll('.tree-item.drag-over').forEach((el) => {
+                if (el !== li) el.classList.remove('drag-over');
+            });
+            li.classList.toggle('drag-over', !invalid);
+            document.getElementById('scene-graph-container')?.classList.remove('root-drop-target');
         });
 
         li.addEventListener('dragleave', (e) => {
+            const related = e.relatedTarget as Node | null;
+            if (related && li.contains(related)) return;
             li.classList.remove('drag-over');
         });
 
@@ -896,13 +1432,18 @@ export class EditorUIController {
             e.stopPropagation();
             li.classList.remove('drag-over');
 
+            if (obj.type === 'Camera') return;
+
             const dragEvent = e as DragEvent;
             if (dragEvent.dataTransfer) {
                 const draggedUuid = dragEvent.dataTransfer.getData('text/plain');
-                if (draggedUuid && draggedUuid !== obj.uuid) {
-                    if (this.onNodeReparentCallback) {
-                        this.onNodeReparentCallback(draggedUuid, obj.uuid);
-                    }
+                if (
+                    draggedUuid &&
+                    draggedUuid !== obj.uuid &&
+                    !this.isTreeUuidUnder(draggedUuid, li) &&
+                    this.onNodeReparentCallback
+                ) {
+                    this.onNodeReparentCallback(draggedUuid, obj.uuid);
                 }
             }
         });
@@ -929,12 +1470,11 @@ export class EditorUIController {
 
         const allItems = document.querySelectorAll('.tree-item');
         allItems.forEach(item => {
-            const itemUuid = (item as HTMLElement).dataset.uuid;
-            if (itemUuid && this.selectedObjectUUIDs.has(itemUuid)) {
-                item.classList.add('selected');
-            } else {
-                item.classList.remove('selected');
-            }
+            const el = item as HTMLElement;
+            const itemUuid = el.dataset.uuid;
+            const selected = !!(itemUuid && this.selectedObjectUUIDs.has(itemUuid));
+            el.classList.toggle('selected', selected);
+            el.setAttribute('aria-selected', selected ? 'true' : 'false');
         });
     }
 
@@ -945,11 +1485,10 @@ export class EditorUIController {
         // Update visual selection in tree
         const allItems = document.querySelectorAll('.tree-item');
         allItems.forEach(item => {
-            if (uuid && (item as HTMLElement).dataset.uuid === uuid) {
-                item.classList.add('selected');
-            } else {
-                item.classList.remove('selected');
-            }
+            const el = item as HTMLElement;
+            const selected = !!(uuid && el.dataset.uuid === uuid);
+            el.classList.toggle('selected', selected);
+            el.setAttribute('aria-selected', selected ? 'true' : 'false');
         });
 
         // Trigger callback
@@ -963,6 +1502,7 @@ export class EditorUIController {
         if (typeStr.includes('mesh')) return 'dot-mesh';
         if (typeStr.includes('light')) return 'dot-light';
         if (typeStr.includes('camera')) return 'dot-camera';
+        if (typeStr.includes('group') || typeStr === 'scenenode') return 'dot-group';
         return 'dot-default';
     }
 

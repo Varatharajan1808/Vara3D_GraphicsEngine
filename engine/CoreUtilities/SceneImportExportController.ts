@@ -5,6 +5,10 @@ import { ZipArchiveLoader } from "./ZipArchiveLoader";
 
 export interface SceneImportExportUI {
   showAlert(title: string, message?: string): void;
+  showToast?(
+    message: string,
+    options?: { type?: "success" | "info" | "error"; durationMs?: number }
+  ): void;
 }
 
 export interface SceneImportExportDeps {
@@ -77,6 +81,10 @@ export class SceneImportExportController {
       if (loader.lastImportedRoot) {
         selectSingleObject(loader.lastImportedRoot);
       }
+      uiManager.showToast?.(
+        `Imported ${gltfFile.name}`,
+        { type: "success" }
+      );
     } catch (error) {
       console.error("Error loading model:", error);
       uiManager.showAlert(
@@ -148,8 +156,17 @@ export class SceneImportExportController {
   }
 
   exportScene(fileName: string = "exported_scene"): void {
-    const gltfExport = new GLTFSceneExporter();
-    const gltf = gltfExport.exportSceneToGLTF(this.deps.scene);
-    gltfExport.saveGLTF(fileName, gltf);
+    try {
+      const gltfExport = new GLTFSceneExporter();
+      const gltf = gltfExport.exportSceneToGLTF(this.deps.scene);
+      gltfExport.saveGLTF(fileName, gltf);
+      this.deps.uiManager.showToast?.("Scene exported", { type: "success" });
+    } catch (error) {
+      console.error("Error exporting scene:", error);
+      this.deps.uiManager.showAlert(
+        "Export Error",
+        `Failed to export scene: ${(error as Error).message}`
+      );
+    }
   }
 }

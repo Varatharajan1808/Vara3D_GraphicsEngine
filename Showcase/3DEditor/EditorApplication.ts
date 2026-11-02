@@ -517,7 +517,7 @@ function updateSceneGraph() {
   uiManager.updateSceneGraph(sceneObjects);
 }
 
-// Handle reparenting
+// Handle reparenting (cycle-safe, world-preserving, undoable)
 uiManager.onNodeReparent((childUuid, parentUuid) => {
   const findNode = (nodes: SceneNode[], uuid: string): SceneNode | null => {
     for (const node of nodes) {
@@ -528,16 +528,53 @@ uiManager.onNodeReparent((childUuid, parentUuid) => {
     return null;
   };
 
-  const allNodes = scene.nodes;
-  const childNode = findNode(allNodes, childUuid);
-  const parentNode = parentUuid ? findNode(allNodes, parentUuid) : null;
-
-  if (childNode) {
-    childNode.setParent(parentNode);
-    updateSceneGraph();
-    triggerAutoSave();
-    console.log(`Reparented ${childNode.name} to ${parentNode ? parentNode.name : 'Root'}`);
+  // Camera is not a SceneNode — never a valid parent/child target
+  if (parentUuid === camera.uuid || childUuid === camera.uuid) {
+    uiManager.showToast("Camera cannot be part of the hierarchy", { type: "info" });
+    return;
   }
+
+  const childNode = findNode(scene.nodes, childUuid);
+  if (!childNode) return;
+
+  const parentNode = parentUuid ? findNode(scene.nodes, parentUuid) : null;
+  if (parentUuid && !parentNode) {
+    uiManager.showToast("Invalid parent target", { type: "error" });
+    return;
+  }
+
+  if (childNode.parent === parentNode) return;
+
+  if (!childNode.canSetParent(parentNode)) {
+    uiManager.showToast("Cannot parent under own child (cycle)", { type: "info" });
+    return;
+  }
+
+  const oldParent = childNode.parent;
+  const oldTRS = childNode.captureLocalTransform();
+  const parentLabel = parentNode ? parentNode.name || parentNode.type : "Root";
+
+  commandHistory.execute({
+    name: `Parent ${childNode.name || childNode.type} → ${parentLabel}`,
+    execute: () => {
+      const ok = childNode.setParent(parentNode, { preserveWorldTransform: true });
+      if (!ok) return;
+      updateSceneGraph();
+      if (selectedObject === childNode) {
+        updateObjectProperties(childNode);
+      }
+      triggerAutoSave();
+    },
+    undo: () => {
+      childNode.setParent(oldParent, { preserveWorldTransform: false });
+      childNode.restoreLocalTransform(oldTRS);
+      updateSceneGraph();
+      if (selectedObject === childNode) {
+        updateObjectProperties(childNode);
+      }
+      triggerAutoSave();
+    },
+  });
 });
 
 // Handle node visibility toggle from scene graph
@@ -618,6 +655,13 @@ uiManager.onObjectSelect((uuid: string) => {
 
 // Update object properties in UI
 function updateObjectProperties(obj: any) {
+  if (!obj) {
+    clearObjectProperties();
+    return;
+  }
+
+  uiManager.setInspectorEmpty(false);
+
   const objectType = obj.type || "Unknown";
   const objectUUID = obj.uuid || "-";
 
@@ -626,6 +670,16 @@ function updateObjectProperties(obj: any) {
   const uuidElement = document.getElementById("object-uuid");
   if (typeElement) typeElement.textContent = objectType;
   if (uuidElement) uuidElement.textContent = objectUUID;
+
+  // Mesh / group material & texture panels
+  const isMeshLike =
+    obj instanceof RenderableMeshObject ||
+    (typeof objectType === "string" &&
+      (objectType.includes("Geometry") || objectType === "Mesh"));
+  const materialPanel = document.getElementById("material-properties-panel");
+  const texturePanel = document.getElementById("texture-properties-panel");
+  if (materialPanel) materialPanel.style.display = isMeshLike ? "block" : "none";
+  if (texturePanel) texturePanel.style.display = isMeshLike ? "block" : "none";
 
   // Update transform properties
   const pos = obj.position || (obj === camera ? camera.eye : null);
@@ -780,6 +834,8 @@ function updateObjectProperties(obj: any) {
 
 // Clear object properties from UI when no object is selected
 function clearObjectProperties() {
+  uiManager.setInspectorEmpty(true);
+
   // Reset type and UUID display
   const typeElement = document.getElementById("object-type");
   const uuidElement = document.getElementById("object-uuid");
@@ -890,6 +946,39 @@ const objectClipboard = new ObjectClipboardController({
   triggerAutoSave,
 });
 objectClipboard.bindKeyboard();
+
+function requestDeleteSelection(): void {
+  let toDelete: SceneNode[] = [];
+  if (events.select && events.select.length > 0) {
+    toDelete = events.select.filter(
+      (o: any) => o && o.type !== "Grid-Geometry"
+    ) as SceneNode[];
+  } else if (selectedObject && (selectedObject as any).type !== "Grid-Geometry") {
+    toDelete = [selectedObject as SceneNode];
+  } else if (previousSelectedUUID) {
+    const node = findObjectByUUID(previousSelectedUUID);
+    if (node && node.type !== "Grid-Geometry") {
+      toDelete = [node];
+    }
+  }
+
+  if (toDelete.length === 0) return;
+
+  const label =
+    toDelete.length > 1
+      ? `${toDelete.length} Objects`
+      : toDelete[0].name || toDelete[0].type || "Selected Object";
+
+  uiManager.showConfirm({
+    title: "Delete Object",
+    message: `Are you sure you want to delete <strong style="color: var(--text-white);">"${label}"</strong>?`,
+    confirmText: "Delete",
+    isDanger: true,
+    onConfirm: () => {
+      objectDelete.deleteNodes(toDelete);
+    },
+  });
+}
 
 // Initialize scene graph
 updateSceneGraph();
@@ -1248,6 +1337,7 @@ document.getElementById("new-scene-btn")?.addEventListener("click", () => {
 
     clearObjectProperties();
       updateSceneGraph();
+      uiManager.showToast("New scene created", { type: "success" });
     }
   });
 });
@@ -1395,37 +1485,8 @@ document.addEventListener("keydown", (e) => {
     return;
   }
 
-  let toDelete: SceneNode[] = [];
-  if (events.select && events.select.length > 0) {
-    toDelete = events.select.filter(
-      (o: any) => o && o.type !== "Grid-Geometry"
-    ) as SceneNode[];
-  } else if (selectedObject && (selectedObject as any).type !== "Grid-Geometry") {
-    toDelete = [selectedObject as SceneNode];
-  } else if (previousSelectedUUID) {
-    const node = findObjectByUUID(previousSelectedUUID);
-    if (node && node.type !== "Grid-Geometry") {
-      toDelete = [node];
-    }
-  }
-
-  if (toDelete.length === 0) return;
-
   e.preventDefault();
-  const label =
-    toDelete.length > 1
-      ? `${toDelete.length} Objects`
-      : toDelete[0].name || toDelete[0].type || "Selected Object";
-
-  uiManager.showConfirm({
-    title: "Delete Object",
-    message: `Are you sure you want to delete <strong style="color: var(--text-white);">"${label}"</strong>?`,
-    confirmText: "Delete",
-    isDanger: true,
-    onConfirm: () => {
-      objectDelete.deleteNodes(toDelete);
-    },
-  });
+  requestDeleteSelection();
 });
 
 // Handle material property changes
@@ -1633,18 +1694,12 @@ function hexToRgb(hex: string): { r: number; g: number; b: number } | null {
     : null;
 }
 
-// WebGL to WebGPU toggle (dummy)
-document.getElementById("webgl-toggle")?.addEventListener("click", (e) => {
-  const toggle = e.target as HTMLElement;
-  toggle.classList.toggle("active");
-
-  if (toggle.classList.contains("active")) {
-    uiManager.showAlert("WebGPU", "WebGPU implementation is coming soon! Currently, the engine uses WebGL 1.0 for high-performance rendering.");
-    // Revert back to WebGL as WebGPU is not yet available
-    toggle.classList.remove("active");
-  } else {
-    console.log("Switched to WebGL");
-  }
+// WebGPU is not available yet — status chip is informational only
+document.getElementById("webgpu-coming-soon")?.addEventListener("click", () => {
+  uiManager.showAlert(
+    "WebGPU",
+    "WebGPU is coming soon. The editor currently runs on WebGL."
+  );
 });
 function animate() {
   // Sync view cube when orbit changes from viewport drag
@@ -1785,7 +1840,7 @@ window.addEventListener("keydown", (e: KeyboardEvent) => {
   }
 });
 
-// Wait for IndexedDB restore (or add defaults) BEFORE first render — prevents deleted-cube flash
+// Restore meshes first (textures fill in async) then start rendering ASAP
 (async () => {
   const restored = await sessionPersistence.tryRestoreSession();
   if (!restored) {

@@ -1,4 +1,5 @@
 import { SceneHierarchyManager } from "../SceneGraph/SceneHierarchyManager";
+import { SceneNode } from "../SceneGraph/SceneNode";
 import { RenderableMeshObject } from "../MeshRenderer/RenderableMeshObject";
 import { CameraController } from "../CameraSystem/CameraController";
 import { SceneInteractionHandler } from "../EventManager/SceneInteractionHandler";
@@ -64,9 +65,72 @@ export class ObjectFactoryController {
       this.addMesh(subtype);
     } else if (type === "light") {
       this.addLight(subtype);
+    } else if (type === "group" || (type === "empty" && subtype === "group")) {
+      this.addGroup();
     } else if (type === "camera") {
       this.setCameraProjection(subtype);
     }
+  }
+
+  /** Empty transform parent for hierarchy (no geometry). */
+  private addGroup(): void {
+    const {
+      scene,
+      createdObjects,
+      commandHistory,
+      updateSceneGraph,
+      updateObjectProperties,
+      selectSingleObject,
+      deselectInEditor,
+      setSelectedObject,
+      setPreviousSelectedUUID,
+      getSelectedObject,
+      events,
+    } = this.deps;
+
+    const group = new SceneNode("Empty");
+    group.type = "Group";
+
+    scene.add(group);
+    createdObjects.set(group.uuid, group);
+    updateSceneGraph();
+
+    setSelectedObject(group);
+    setPreviousSelectedUUID(group.uuid);
+    updateObjectProperties(group);
+
+    events.selectedObject = group;
+    events.isObjectSelected = true;
+    events.select = [group];
+    if (events.gizmo && !events.gizmo.currentGizmoType) {
+      events.gizmo.setMode("translate");
+    }
+    if (events.gizmo) events.gizmo.visible = true;
+    if (events.webgl) events.webgl.selectedObject = group;
+
+    commandHistory.execute(
+      {
+        name: "Add Empty",
+        execute: () => {
+          scene.add(group);
+          createdObjects.set(group.uuid, group);
+          selectSingleObject(group);
+          updateSceneGraph();
+        },
+        undo: () => {
+          scene.remove(group);
+          createdObjects.delete(group.uuid);
+          if (
+            getSelectedObject() === group ||
+            events.select.some((o: any) => o.uuid === group.uuid)
+          ) {
+            deselectInEditor();
+          }
+          updateSceneGraph();
+        },
+      },
+      false
+    );
   }
 
   private addMesh(subtype: string): void {

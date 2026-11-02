@@ -235,7 +235,9 @@ export class WebGLRenderEngine {
 
       if (i < pointLights.length) {
         const light = pointLights[i];
-        if (posLoc) gl.uniform3fv(posLoc, new Float32Array([light.position.x, light.position.y, light.position.z]));
+        light.updateWorldMatrix();
+        const wp = light.getWorldPosition();
+        if (posLoc) gl.uniform3fv(posLoc, new Float32Array([wp.x, wp.y, wp.z]));
         if (radiusLoc) gl.uniform1f(radiusLoc, light.radius);
         if (colorLoc) gl.uniform3fv(colorLoc, new Float32Array(light.color));
         if (intensityLoc) gl.uniform1f(intensityLoc, light.intensity);
@@ -257,8 +259,17 @@ export class WebGLRenderEngine {
 
       if (i < spotLights.length) {
         const light = spotLights[i];
-        if (posLoc) gl.uniform3fv(posLoc, new Float32Array([light.position.x, light.position.y, light.position.z]));
-        if (dirLoc) gl.uniform3fv(dirLoc, new Float32Array(light.direction));
+        light.updateWorldMatrix();
+        const wp = light.getWorldPosition();
+        const m = light.worldMatrix;
+        const ld = light.direction;
+        let dx = m[0] * ld[0] + m[4] * ld[1] + m[8] * ld[2];
+        let dy = m[1] * ld[0] + m[5] * ld[1] + m[9] * ld[2];
+        let dz = m[2] * ld[0] + m[6] * ld[1] + m[10] * ld[2];
+        const dlen = Math.hypot(dx, dy, dz) || 1;
+        dx /= dlen; dy /= dlen; dz /= dlen;
+        if (posLoc) gl.uniform3fv(posLoc, new Float32Array([wp.x, wp.y, wp.z]));
+        if (dirLoc) gl.uniform3fv(dirLoc, new Float32Array([dx, dy, dz]));
         if (angleLoc) gl.uniform1f(angleLoc, light.angle);
         if (colorLoc) gl.uniform3fv(colorLoc, new Float32Array(light.color));
         if (intensityLoc) gl.uniform1f(intensityLoc, light.intensity);
@@ -279,7 +290,15 @@ export class WebGLRenderEngine {
 
       if (i < directionalLights.length) {
         const light = directionalLights[i];
-        if (dirLoc) gl.uniform3fv(dirLoc, new Float32Array(light.direction));
+        light.updateWorldMatrix();
+        const m = light.worldMatrix;
+        const ld = light.direction;
+        let dx = m[0] * ld[0] + m[4] * ld[1] + m[8] * ld[2];
+        let dy = m[1] * ld[0] + m[5] * ld[1] + m[9] * ld[2];
+        let dz = m[2] * ld[0] + m[6] * ld[1] + m[10] * ld[2];
+        const dlen = Math.hypot(dx, dy, dz) || 1;
+        dx /= dlen; dy /= dlen; dz /= dlen;
+        if (dirLoc) gl.uniform3fv(dirLoc, new Float32Array([dx, dy, dz]));
         if (colorLoc) gl.uniform3fv(colorLoc, new Float32Array(light.color));
         if (intensityLoc) gl.uniform1f(intensityLoc, light.intensity);
       } else {

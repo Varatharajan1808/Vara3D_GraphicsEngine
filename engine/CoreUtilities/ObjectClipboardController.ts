@@ -9,6 +9,10 @@ import { cloneSceneNode, getTopLevelNodes } from "./SceneNodeCloner";
 export interface ObjectClipboardUI {
   selectObject(uuid: string | null): void;
   selectObjects(uuids: string[]): void;
+  showToast?(
+    message: string,
+    options?: { type?: "success" | "info" | "error"; durationMs?: number }
+  ): void;
 }
 
 export interface ObjectClipboardDeps {
@@ -90,11 +94,18 @@ export class ObjectClipboardController {
     const targets = this.getSelectedCloneTargets();
     if (targets.length === 0) return false;
     this.clipboard = targets.map((n) => cloneSceneNode(n));
+    this.deps.uiManager.showToast?.(
+      targets.length > 1 ? `Copied ${targets.length} objects` : "Copied",
+      { type: "info" }
+    );
     return true;
   }
 
   paste(): boolean {
-    if (!this.clipboard.length) return false;
+    if (!this.clipboard.length) {
+      this.deps.uiManager.showToast?.("Clipboard empty", { type: "info" });
+      return false;
+    }
 
     const { commandHistory, events, updateSceneGraph, triggerAutoSave, deselectInEditor } =
       this.deps;
@@ -128,6 +139,10 @@ export class ObjectClipboardController {
         },
       },
       true
+    );
+    this.deps.uiManager.showToast?.(
+      roots.length > 1 ? `Pasted ${roots.length} objects` : "Pasted",
+      { type: "success" }
     );
     return true;
   }
@@ -172,6 +187,10 @@ export class ObjectClipboardController {
         },
       },
       true
+    );
+    this.deps.uiManager.showToast?.(
+      roots.length > 1 ? `Duplicated ${roots.length} objects` : "Duplicated",
+      { type: "success" }
     );
     return true;
   }

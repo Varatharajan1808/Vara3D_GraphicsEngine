@@ -10,6 +10,14 @@
   <link rel="stylesheet" href="../../engine/UserInterface/styles/components.css" />
   <link rel="icon" type="image/svg+xml" href="./favicon.svg" />
   <link rel="shortcut icon" type="image/svg+xml" href="./favicon.svg" />
+  <script>
+    try {
+      var savedTheme = localStorage.getItem('vara3d.theme');
+      if (savedTheme === 'light' || savedTheme === 'dark') {
+        document.documentElement.setAttribute('data-theme', savedTheme);
+      }
+    } catch (e) { /* ignore */ }
+  </script>
   <style>
     /* Top Menu Bar */
     #top-menu-bar {
@@ -58,12 +66,21 @@
       color: var(--text-primary);
       cursor: pointer;
       transition: all var(--transition-fast);
-      font-size: 18px;
+      padding: 0;
+    }
+
+    .toolbar-btn svg {
+      width: 18px;
+      height: 18px;
+      display: block;
+      flex-shrink: 0;
+      pointer-events: none;
     }
 
     .toolbar-btn:hover {
       background: var(--bg-hover);
       border-color: var(--border-light);
+      color: var(--text-white);
     }
 
     .toolbar-btn.active {
@@ -76,6 +93,10 @@
     #right-panel {
       display: flex;
       flex-direction: column;
+      min-height: 0;
+      overflow-y: auto;
+      overflow-x: hidden;
+      overscroll-behavior: contain;
     }
 
     .panel-section {
@@ -114,6 +135,9 @@
       position: relative;
       width: 40px;
       height: 20px;
+      padding: 0;
+      border: none;
+      appearance: none;
       background: var(--bg-tertiary);
       border-radius: 10px;
       cursor: pointer;
@@ -138,6 +162,105 @@
 
     .toggle-switch.active::after {
       transform: translateX(20px);
+    }
+
+    .toggle-switch.disabled,
+    .toggle-switch[aria-disabled="true"] {
+      opacity: 0.45;
+      cursor: not-allowed;
+      pointer-events: none;
+    }
+
+    .renderer-status {
+      gap: var(--spacing-sm);
+    }
+
+    .status-chip {
+      font-size: 10px;
+      font-weight: 600;
+      letter-spacing: 0.02em;
+      padding: 2px 7px;
+      border-radius: 999px;
+      border: 1px solid var(--border-color);
+      background: var(--bg-tertiary);
+      color: var(--text-secondary);
+      user-select: none;
+    }
+
+    .status-chip.coming-soon {
+      border-color: rgba(79, 195, 247, 0.35);
+      color: var(--accent-active);
+      background: var(--accent-light);
+    }
+
+    .version-help-pill {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 26px;
+      height: 26px;
+      padding: 0;
+      border: 1px solid var(--border-color);
+      border-radius: 999px;
+      background: var(--bg-tertiary);
+      color: var(--text-primary);
+      cursor: pointer;
+      transition: background-color var(--transition-fast), border-color var(--transition-fast);
+    }
+
+    .version-help-pill:hover {
+      background: var(--bg-hover);
+      border-color: var(--border-light);
+    }
+
+    .version-help-pill .help-badge {
+      width: 18px;
+      height: 18px;
+      border-radius: 50%;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 11px;
+      font-weight: 700;
+      color: var(--bg-secondary);
+      background: var(--text-primary);
+      box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.08);
+    }
+
+    .shortcuts-help-list {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      text-align: left;
+    }
+
+    .shortcuts-help-group-title {
+      margin: 4px 0 2px;
+      font-size: 11px;
+      font-weight: 600;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      color: var(--text-secondary);
+    }
+
+    .shortcuts-help-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      font-size: var(--font-size-sm);
+      color: var(--text-primary);
+    }
+
+    .shortcuts-help-row kbd {
+      flex-shrink: 0;
+      font-family: ui-monospace, "Cascadia Mono", Consolas, monospace;
+      font-size: 11px;
+      color: var(--text-secondary);
+      background: var(--bg-tertiary);
+      border: 1px solid var(--border-color);
+      border-radius: 4px;
+      padding: 2px 6px;
     }
 
     /* File input hidden */
@@ -253,62 +376,146 @@
     <div id="top-menu-bar">
       <!-- File Menu -->
       <div class="menu-item">
-        <button class="menu-btn" id="file-menu-btn">File</button>
-        <div class="dropdown-menu" id="file-menu">
-          <button class="dropdown-item" id="new-scene-btn">New Scene</button>
+        <button type="button" class="menu-btn" id="file-menu-btn" title="File (Shift+F)" aria-haspopup="menu" aria-expanded="false" aria-controls="file-menu">File</button>
+        <div class="dropdown-menu" id="file-menu" role="menu" aria-labelledby="file-menu-btn">
+          <button class="dropdown-item" id="new-scene-btn">
+            <span class="item-label">New Scene</span>
+          </button>
           <div class="dropdown-divider"></div>
-          <button class="dropdown-item" id="import-gltf-btn">Import Model (.gltf, .glb, .zip)</button>
-          <button class="dropdown-item" id="import-gltf-folder-btn">Import Model Folder</button>
-          <button class="dropdown-item" id="export-gltf-btn">Export GLTF</button>
+          <button class="dropdown-item" id="import-gltf-btn">
+            <span class="item-label">Import Model (.gltf, .glb, .zip)</span>
+          </button>
+          <button class="dropdown-item" id="import-gltf-folder-btn">
+            <span class="item-label">Import Model Folder</span>
+          </button>
+          <button class="dropdown-item" id="export-gltf-btn">
+            <span class="item-label">Export GLTF</span>
+          </button>
         </div>
       </div>
       <!-- Add Menu -->
       <div class="menu-item">
-        <button class="menu-btn" id="add-menu-btn">Add</button>
-        <div class="dropdown-menu" id="add-menu">
+        <button type="button" class="menu-btn" id="add-menu-btn" title="Add (Shift+A)" aria-haspopup="menu" aria-expanded="false" aria-controls="add-menu">Add</button>
+        <div class="dropdown-menu" id="add-menu" role="menu" aria-labelledby="add-menu-btn">
+          <div class="dropdown-header">Hierarchy</div>
+          <button class="dropdown-item" data-type="group" data-geometry="empty"><span class="item-label">Empty</span></button>
+          <div class="dropdown-divider"></div>
           <div class="dropdown-header">Meshes</div>
-          <button class="dropdown-item" data-type="mesh" data-geometry="box">Box</button>
-          <button class="dropdown-item" data-type="mesh" data-geometry="sphere">Sphere</button>
-          <button class="dropdown-item" data-type="mesh" data-geometry="plane">Plane</button>
-          <button class="dropdown-item" data-type="mesh" data-geometry="cone">Cone</button>
-          <button class="dropdown-item" data-type="mesh" data-geometry="cylinder">Cylinder</button>
+          <button class="dropdown-item" data-type="mesh" data-geometry="box"><span class="item-label">Box</span></button>
+          <button class="dropdown-item" data-type="mesh" data-geometry="sphere"><span class="item-label">Sphere</span></button>
+          <button class="dropdown-item" data-type="mesh" data-geometry="plane"><span class="item-label">Plane</span></button>
+          <button class="dropdown-item" data-type="mesh" data-geometry="cone"><span class="item-label">Cone</span></button>
+          <button class="dropdown-item" data-type="mesh" data-geometry="cylinder"><span class="item-label">Cylinder</span></button>
           <div class="dropdown-divider"></div>
           <div class="dropdown-header">Lights</div>
-          <button class="dropdown-item" data-type="light" data-light="point">Point Light</button>
-          <button class="dropdown-item" data-type="light" data-light="spot">Spot Light</button>
-          <button class="dropdown-item" data-type="light" data-light="directional">Directional Light</button>
+          <button class="dropdown-item" data-type="light" data-light="point"><span class="item-label">Point Light</span></button>
+          <button class="dropdown-item" data-type="light" data-light="spot"><span class="item-label">Spot Light</span></button>
+          <button class="dropdown-item" data-type="light" data-light="directional"><span class="item-label">Directional Light</span></button>
           <div class="dropdown-divider"></div>
           <div class="dropdown-header">Camera</div>
-          <button class="dropdown-item" data-type="camera" data-camera="perspective">Perspective</button>
-          <button class="dropdown-item" data-type="camera" data-camera="orthographic">Orthographic</button>
+          <button class="dropdown-item" data-type="camera" data-camera="perspective"><span class="item-label">Perspective</span></button>
+          <button class="dropdown-item" data-type="camera" data-camera="orthographic"><span class="item-label">Orthographic</span></button>
         </div>
       </div>
 
-      <!-- Grid Toggle -->
-      <div class="menu-item"
-        style="display: flex; align-items: center; gap: 8px; margin-left: auto; padding-right: 12px;">
+      <!-- Grid Toggle + inspector + shortcuts help -->
+      <div class="menu-item topbar-trailing"
+        style="display: flex; align-items: center; gap: 12px; margin-left: auto; padding-right: 12px;">
         <span style="color: var(--text-secondary); font-size: var(--font-size-sm);">Grid Helper</span>
-        <div class="toggle-switch active" id="grid-visible-toggle" title="Toggle Grid Visibility"></div>
+        <button type="button" class="toggle-switch active" id="grid-visible-toggle" role="switch" aria-checked="true" title="Toggle Grid Visibility" aria-label="Grid Helper"></button>
+        <button type="button" class="inspector-toggle-btn" id="theme-toggle-btn" title="Toggle light/dark theme" aria-label="Toggle light/dark theme">
+          <svg class="theme-icon-sun" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <circle cx="12" cy="12" r="4"></circle>
+            <path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"></path>
+          </svg>
+          <svg class="theme-icon-moon" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M21 14.5A8.5 8.5 0 0 1 9.5 3 7 7 0 1 0 21 14.5z"></path>
+          </svg>
+        </button>
+        <button type="button" class="inspector-toggle-btn" id="inspector-toggle-btn" title="Toggle Inspector (I)" aria-label="Toggle inspector panel" aria-pressed="true">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <rect x="3" y="4" width="18" height="16" rx="2"></rect>
+            <path d="M15 4v16"></path>
+          </svg>
+        </button>
+        <button type="button" class="version-help-pill" id="shortcuts-help-btn" title="Keyboard shortcuts" aria-label="Show keyboard shortcuts">
+          <span class="help-badge" aria-hidden="true">?</span>
+        </button>
       </div>
     </div>
+
+    <div id="inspector-backdrop" class="inspector-backdrop" hidden></div>
 
     <!-- Left Toolbar -->
     <div id="left-toolbar">
       <!-- Mode Toggle -->
-      <button class="toolbar-btn active" id="object-mode-btn" title="Object Mode (O)" style="font-size: 13px; font-weight: bold;">OBJ</button>
-      <button class="toolbar-btn" id="edit-mode-btn" title="Edit Mode (E)" style="font-size: 13px; font-weight: bold;">EDIT</button>
+      <button class="toolbar-btn active" id="object-mode-btn" title="Object Mode (O)" aria-label="Object Mode">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M12 3 20 7.5v9L12 21 4 16.5v-9L12 3z"></path>
+          <path d="M12 12 20 7.5"></path>
+          <path d="M12 12v9"></path>
+          <path d="M12 12 4 7.5"></path>
+        </svg>
+      </button>
+      <button class="toolbar-btn" id="edit-mode-btn" title="Edit Mode (E)" aria-label="Edit Mode">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M12 20h9"></path>
+          <path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"></path>
+        </svg>
+      </button>
       <div style="width: 24px; height: 1px; background: var(--border-color); margin: 4px 0;"></div>
-      
+
       <!-- Transform Tools -->
-      <button class="toolbar-btn active" id="translate-tool" title="Translate (T)">↔</button>
-      <button class="toolbar-btn" id="rotate-tool" title="Rotate (R)">↻</button>
-      <button class="toolbar-btn" id="scale-tool" title="Scale (S)">⇄</button>
-      
+      <button class="toolbar-btn active" id="translate-tool" title="Translate (T)" aria-label="Translate">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M12 2v20"></path>
+          <path d="M2 12h20"></path>
+          <path d="m8 6 4-4 4 4"></path>
+          <path d="m8 18 4 4 4-4"></path>
+          <path d="m6 8-4 4 4 4"></path>
+          <path d="m18 8 4 4-4 4"></path>
+        </svg>
+      </button>
+      <button class="toolbar-btn" id="rotate-tool" title="Rotate (R)" aria-label="Rotate">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M21 12a9 9 0 1 1-3-6.7"></path>
+          <path d="M21 3v6h-6"></path>
+        </svg>
+      </button>
+      <button class="toolbar-btn" id="scale-tool" title="Scale (S)" aria-label="Scale">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M15 3h6v6"></path>
+          <path d="M9 21H3v-6"></path>
+          <path d="M21 3 14 10"></path>
+          <path d="m3 21 7-7"></path>
+        </svg>
+      </button>
+
       <!-- Edit Mode Sub-modes (Initially hidden) -->
       <div id="edit-submodes-divider" style="width: 24px; height: 1px; background: var(--border-color); margin: 4px 0; display: none;"></div>
-      <button class="toolbar-btn" id="vertex-select-btn" title="Vertex Select (1)" style="font-size: 11px; display: none; font-weight: bold;">VERT</button>
-      <button class="toolbar-btn" id="edge-select-btn" title="Edge Select (2)" style="font-size: 11px; display: none; font-weight: bold;">EDGE</button>
-      <button class="toolbar-btn" id="face-select-btn" title="Face Select (3)" style="font-size: 11px; display: none; font-weight: bold;">FACE</button>
+      <button class="toolbar-btn" id="vertex-select-btn" title="Vertex Select (1)" aria-label="Vertex Select" style="display: none;">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="12" cy="12" r="2.5" fill="currentColor"></circle>
+          <path d="M12 5v3.5"></path>
+          <path d="M12 15.5V19"></path>
+          <path d="M5 12h3.5"></path>
+          <path d="M15.5 12H19"></path>
+        </svg>
+      </button>
+      <button class="toolbar-btn" id="edge-select-btn" title="Edge Select (2)" aria-label="Edge Select" style="display: none;">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="6" cy="18" r="2" fill="currentColor"></circle>
+          <circle cx="18" cy="6" r="2" fill="currentColor"></circle>
+          <path d="M7.5 16.5 16.5 7.5"></path>
+        </svg>
+      </button>
+      <button class="toolbar-btn" id="face-select-btn" title="Face Select (3)" aria-label="Face Select" style="display: none;">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M5 7.5 12 4l7 3.5v9L12 20l-7-3.5v-9z"></path>
+          <path d="M12 4v16" opacity="0.45"></path>
+          <path d="M5 7.5 19 7.5" opacity="0.45"></path>
+        </svg>
+      </button>
     </div>
 
     <!-- Viewport -->
@@ -328,7 +535,11 @@
           <span class="panel-icon">▼</span>
         </div>
         <div class="panel-content">
-          <div class="scene-graph-container">
+          <div class="scene-graph-container" id="scene-graph-container">
+            <div class="scene-graph-empty" id="scene-graph-empty" style="display: none;" aria-hidden="true">
+              <div class="scene-graph-empty-title">No objects yet</div>
+              <div class="scene-graph-empty-hint">Use <strong>Add</strong> or <kbd>Shift+A</kbd> to create meshes and lights. Drag items onto another node to parent, or onto empty space for root.</div>
+            </div>
             <ul class="tree-view" id="scene-tree">
               <!-- Scene graph items will be populated here -->
             </ul>
@@ -336,8 +547,29 @@
         </div>
       </div>
 
+      <!-- Empty selection state -->
+      <div class="panel" id="selection-empty-state">
+        <div class="selection-empty-body">
+          <div class="selection-empty-icon" aria-hidden="true">
+            <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M9 3H5a2 2 0 0 0-2 2v4"></path>
+              <path d="M15 3h4a2 2 0 0 1 2 2v4"></path>
+              <path d="M9 21H5a2 2 0 0 1-2-2v-4"></path>
+              <path d="M15 21h4a2 2 0 0 0 2-2v-4"></path>
+              <circle cx="12" cy="12" r="2.5"></circle>
+            </svg>
+          </div>
+          <div class="selection-empty-title">No selection</div>
+          <div class="selection-empty-hint">Click an object in the viewport or Scene Graph to edit properties.</div>
+          <div class="selection-empty-tips">
+            <span>Add → Mesh / Light</span>
+            <span>T / R / S — transform tools</span>
+          </div>
+        </div>
+      </div>
+
       <!-- Object Properties -->
-      <div class="panel" id="object-properties-panel">
+      <div class="panel" id="object-properties-panel" style="display: none;">
         <div class="panel-header">
           <span class="panel-title">Object Properties</span>
           <span class="panel-icon">▼</span>
@@ -401,7 +633,7 @@
       </div>
 
       <!-- Material Properties -->
-      <div class="panel" id="material-properties-panel">
+      <div class="panel" id="material-properties-panel" style="display: none;">
         <div class="panel-header">
           <span class="panel-title">Material Properties</span>
           <span class="panel-icon">▼</span>
@@ -461,7 +693,7 @@
       </div>
 
       <!-- Texture Properties -->
-      <div class="panel" id="texture-properties-panel">
+      <div class="panel" id="texture-properties-panel" style="display: none;">
         <div class="panel-header">
           <span class="panel-title">Texture Properties</span>
           <span class="panel-icon">▼</span>
@@ -623,10 +855,10 @@
           <span class="status-value" id="draw-calls-value">0</span>
         </div>
       </div>
-      <div class="status-item">
-        <span class="status-label">WebGL</span>
-        <div class="toggle-switch" id="webgl-toggle"></div>
-        <span class="status-label">WebGPU</span>
+      <div class="status-item renderer-status" title="WebGPU support is planned; the editor runs on WebGL today.">
+        <span class="status-label">Renderer</span>
+        <span class="status-value" id="renderer-badge">WebGL</span>
+        <span class="status-chip coming-soon" id="webgpu-coming-soon">WebGPU soon</span>
       </div>
     </div>
   </div>

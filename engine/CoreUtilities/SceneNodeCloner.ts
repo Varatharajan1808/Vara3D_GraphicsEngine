@@ -137,22 +137,12 @@ export function cloneSceneNode(source: SceneNode): SceneNode {
   return clone;
 }
 
-/** True if `node` is under `ancestor` in the hierarchy. */
-function isDescendantOf(node: SceneNode, ancestor: SceneNode): boolean {
-  let cur: SceneNode | null = node.parent;
-  while (cur) {
-    if (cur === ancestor) return true;
-    cur = cur.parent;
-  }
-  return false;
-}
-
 /**
  * From a selection, keep only top-level roots so cloning a parent
  * does not also separately clone its already-selected children.
  */
 export function getTopLevelNodes(nodes: SceneNode[]): SceneNode[] {
   return nodes.filter(
-    (n) => !nodes.some((other) => other !== n && isDescendantOf(n, other))
+    (n) => !nodes.some((other) => other !== n && n.isDescendantOf(other))
   );
 }
